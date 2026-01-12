@@ -1,6 +1,6 @@
 # idempotent
 
-A lightweight Rust library for generating and validating idempotency keys.
+A lightweight library for generating and validating idempotency keys.
 
 Idempotency keys ensure that duplicate requests (e.g., due to retries or network issues) are handled safely, enabling exactly-once semantics in your APIs.
 
