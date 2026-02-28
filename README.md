@@ -29,6 +29,7 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 idempotent = "0.0.0"
+````
 
 ## Optional Features
 
