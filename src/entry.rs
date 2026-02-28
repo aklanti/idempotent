@@ -7,7 +7,7 @@ use std::time::Duration;
 use bytes::Bytes;
 
 /// An idempotency tracking entry
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IdempotencyEntry<State: EntryState> {
     /// A hash of the original request

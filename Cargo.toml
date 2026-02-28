@@ -17,8 +17,10 @@ features = ["full"]
 serde = ["dep:serde"]
 
 [dependencies]
+async-trait = "0.1"
 bytes = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"], optional = true }
+thiserror = "2"
 
 [dev-dependencies]
 googletest = "0.14"

@@ -5,5 +5,11 @@
 #![cfg_attr(docsrs, doc(cfg))]
 
 pub mod entry;
+pub mod error;
+pub mod key;
+pub mod store;
+
 #[doc(inline)]
 pub use entry::{CachedResponse, IdempotencyEntry, Metadata};
+#[doc(inline)]
+pub use key::IdempotencyKey;
