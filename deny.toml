@@ -1,0 +1,44 @@
+# Documentation for this configuration file can be found at
+# https://embarkstudios.github.io/cargo-deny/checks/cfg.html
+[graph]
+targets = [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+     "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "wasm32-unknown-unknown",
+]
+
+[advisories]
+unmaintained = 'workspace'
+
+# https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
+[licenses]
+confidence-threshold = 0.93
+# See https://spdx.org/licenses/ for list of possible licenses
+allow = [
+    "Apache-2.0",
+    "MPL-2.0",
+    "MIT",
+]
+
+exceptions = []
+
+[licenses.private]
+ignore = false
+
+# https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    {crate  = "openssl", use-instead = "rustls"},
+    {crate = "openssl-sys", use-instead = "rustls"}
+]
+
+# https://embarkstudios.github.io/cargo-deny/checks/sources/cfg.html
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

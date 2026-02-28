@@ -13,7 +13,15 @@ categories = ["web-programming", "data-structures"]
 [package.metadata.docs.rs]
 features = ["full"]
 
+[features]
+serde = ["dep:serde"]
+
 [dependencies]
+bytes = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+googletest = "0.14"
 
 [lints.clippy]
 allow_attributes_without_reason = "warn"
@@ -40,6 +48,3 @@ unused_must_use = "deny"
 broken_intra_doc_links = "warn"
 private_doc_tests = "warn"
 unescaped_backticks = "warn"
-
-[badges]
-maintenance = { status = "actively-developed" }

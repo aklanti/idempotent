@@ -1,14 +1,9 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! This crate provides an idempotency abstraction.
+//!
+//! The fundamental invariant is that for a given idempotency key, the side effect must be executed **at most once**,
+//! and the response MUST be returned **at least once** (to every request bearing that key within the TTL window)
+#![cfg_attr(docsrs, doc(cfg))]
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod entry;
+#[doc(inline)]
+pub use entry::{CachedResponse, IdempotencyEntry, Metadata};
