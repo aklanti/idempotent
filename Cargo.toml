@@ -19,6 +19,7 @@ serde = ["dep:serde"]
 [dependencies]
 async-trait = "0.1"
 bytes = { version = "1", features = ["serde"] }
+rand = "0.10.0"
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 

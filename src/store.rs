@@ -1,6 +1,6 @@
 //! Idempotency keys store
 
-use crate::entry::{Completed, IdempotencyEntry, Processing};
+use crate::entry::{Completed, FencingToken, IdempotencyEntry, Processing};
 use crate::key::IdempotencyKey;
 
 /// A store trait
@@ -11,7 +11,8 @@ pub trait IdempotencyStore: Send + Sync + 'static {
 
     /// Attempt to claim an idempotency key
     ///
-    /// It returns `Ok(None)` if claimed, or `Ok(Some(ExistingEntry))` if the key already exists
+    /// It returns [`InsertResult::Claimed`] if claimed, or [`InsertResult::Exists`]
+    /// if the key already exists
     async fn try_insert(
         &self,
         key: &IdempotencyKey,
@@ -25,7 +26,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         &self,
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
-        fencing_token: u64,
+        fencing_token: FencingToken,
     ) -> Result<(), Self::Error>;
 
     /// Removes an idempotency entry
@@ -45,13 +46,4 @@ pub enum InsertResult {
     },
     /// A key already exists
     Exists,
-}
-
-/// An entry from a store
-#[derive(Debug)]
-pub enum ExistingEntry {
-    /// A request with this idempotency key is in-flight
-    Processing(IdempotencyEntry<Processing>),
-    /// A request with this idempotency key was completed
-    Completed(IdempotencyEntry<Completed>),
 }

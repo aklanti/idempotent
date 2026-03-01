@@ -22,9 +22,9 @@ pub struct IdempotencyEntry<State: EntryState> {
 
 impl IdempotencyEntry<Processing> {
     /// Creates a new idempotency entry in processing state
-    pub const fn new(fingerprint: u64, ttl: Duration) -> Self {
+    pub fn new(fingerprint: u64, ttl: Duration) -> Self {
         Self {
-            state: Processing,
+            state: Processing::new(),
             fingerprint,
             ttl,
         }
@@ -92,11 +92,48 @@ pub struct Metadata(HashMap<String, Vec<u8>>);
 ///
 /// A concurrent request with the same idempotency key will return a response
 /// that indicates a conflict.
-#[derive(Copy, Debug, Clone, PartialEq, Eq)]
-pub struct Processing;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Processing {
+    /// A claim fencing token
+    fencing_token: FencingToken,
+}
+
+impl Processing {
+    /// Creates new processing  state
+    pub fn new() -> Self {
+        Self {
+            fencing_token: FencingToken::new(),
+        }
+    }
+}
+
+impl Default for Processing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl EntryState for Processing {}
 impl sealed::Sealed for Processing {}
+
+/// A token generated when a key is claimed
+///
+/// It prevennts the zombie completions from overwriting a reclaimed key's result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FencingToken(u64);
+
+impl FencingToken {
+    /// Creates a new fencing token
+    pub fn new() -> Self {
+        Self(rand::random())
+    }
+}
+
+impl Default for FencingToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// The request handler has processed the request and the response is cached
 #[derive(Debug, PartialEq, Eq)]
@@ -123,7 +160,7 @@ pub trait EntryState: sealed::Sealed {}
 mod tests {
     use std::time::Duration;
 
-    use googletest::matchers::eq;
+    use googletest::matchers::{eq, pat};
     use googletest::{expect_that, gtest};
 
     use super::*;
@@ -132,14 +169,14 @@ mod tests {
     fn new_idempotency_entry_always_in_processing_state() {
         let entry = IdempotencyEntry::new(0x1ab950a, Duration::from_nanos(1));
         expect_that!(entry.fingerprint, eq(0x1ab950a));
-        expect_that!(entry.state, eq(Processing));
+        expect_that!(entry.state, pat!(Processing { .. }));
     }
 
     #[gtest]
     fn can_complete_processing_idempotency_entry() {
         let entry = IdempotencyEntry::new(0x1ab950a, Duration::from_nanos(1));
         expect_that!(entry.fingerprint, eq(0x1ab950a));
-        expect_that!(entry.state, eq(Processing));
+        expect_that!(entry.state, pat!(Processing { .. }));
         let response = CachedResponse {
             status_code: 200,
             metadata: Metadata::default(),
