@@ -6,10 +6,13 @@
 
 pub mod entry;
 pub mod error;
+pub mod fingerprint;
 pub mod key;
 pub mod store;
 
 #[doc(inline)]
 pub use entry::{CachedResponse, IdempotencyEntry, Metadata};
+#[doc(inline)]
+pub use fingerprint::Fingerprint;
 #[doc(inline)]
 pub use key::IdempotencyKey;

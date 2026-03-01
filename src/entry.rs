@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 
+use super::fingerprint::Fingerprint;
+
 /// An idempotency tracking entry
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -13,7 +15,7 @@ pub struct IdempotencyEntry<State: EntryState> {
     /// A hash of the original request
     ///
     /// A fingerprint used to detect when a key is reused with different request body
-    pub fingerprint: u64,
+    pub fingerprint: Fingerprint,
     /// Time to live for this entry
     pub ttl: Duration,
     /// The current processing state of the request with this entry
@@ -22,7 +24,7 @@ pub struct IdempotencyEntry<State: EntryState> {
 
 impl IdempotencyEntry<Processing> {
     /// Creates a new idempotency entry in processing state
-    pub fn new(fingerprint: u64, ttl: Duration) -> Self {
+    pub fn new(fingerprint: Fingerprint, ttl: Duration) -> Self {
         Self {
             state: Processing::new(),
             fingerprint,
@@ -37,7 +39,9 @@ impl IdempotencyEntry<Processing> {
     /// ```
     /// # use std::time::Duration;
     /// # use idempotent::{CachedResponse, IdempotencyEntry, Metadata};
-    /// let entry = IdempotencyEntry::new(0x1ab950a, Duration::from_nanos(2));
+    /// # use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
+    /// let fingerprint = DefaultFingerprintStrategy.compute("/get", &[2]);
+    /// let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(2));
     /// let response = CachedResponse {
     ///     status_code: 200,
     ///     metadata: Metadata::default(),
@@ -65,7 +69,7 @@ impl IdempotencyEntry<Completed> {
 impl<State: EntryState> IdempotencyEntry<State> {
     /// Checks whether a request fingerprint matches this entry
     /// It returns false when a client reuses an idempotency key with a different request body
-    pub const fn fingerprint_matches(&self, fingerprint: u64) -> bool {
+    pub fn fingerprint_matches(&self, fingerprint: Fingerprint) -> bool {
         self.fingerprint == fingerprint
     }
 }
@@ -167,15 +171,17 @@ mod tests {
 
     #[gtest]
     fn new_idempotency_entry_always_in_processing_state() {
-        let entry = IdempotencyEntry::new(0x1ab950a, Duration::from_nanos(1));
-        expect_that!(entry.fingerprint, eq(0x1ab950a));
+        let fingerprint = Fingerprint(0x1ab950a);
+        let entry = IdempotencyEntry::new(fingerprint.clone(), Duration::from_nanos(1));
+        expect_that!(entry.fingerprint, eq(&fingerprint));
         expect_that!(entry.state, pat!(Processing { .. }));
     }
 
     #[gtest]
     fn can_complete_processing_idempotency_entry() {
-        let entry = IdempotencyEntry::new(0x1ab950a, Duration::from_nanos(1));
-        expect_that!(entry.fingerprint, eq(0x1ab950a));
+        let fingerprint = Fingerprint(0x1ab950a);
+        let entry = IdempotencyEntry::new(fingerprint.clone(), Duration::from_nanos(1));
+        expect_that!(entry.fingerprint, eq(&fingerprint));
         expect_that!(entry.state, pat!(Processing { .. }));
         let response = CachedResponse {
             status_code: 200,
