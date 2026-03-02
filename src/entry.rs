@@ -209,6 +209,13 @@ mod tests {
     }
 
     #[gtest]
+    fn new_idempotency_preserve_ttl() {
+        let fingerprint = Fingerprint(0x1ab950a);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
+        expect_that!(entry.ttl, eq(Duration::from_nanos(1)));
+    }
+
+    #[gtest]
     fn can_complete_processing_idempotency_entry() {
         let fingerprint = Fingerprint(0x1ab950a);
         let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
@@ -230,6 +237,37 @@ mod tests {
         let fingerprint = Fingerprint(0x1ab950a);
         let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
         assert_that!(entry.fingerprint_matches(fingerprint), eq(true))
+    }
+
+    #[gtest]
+    fn complete_idempotency_entry_preserve_fingerprint() {
+        let fingerprint = Fingerprint(0x1ab950a);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
+        expect_that!(entry.fingerprint, eq(fingerprint));
+        expect_that!(entry.state, pat!(Processing { .. }));
+        let response = CachedResponse {
+            status_code: 200,
+            metadata: Metadata::default(),
+            body: vec![].into(),
+        };
+        let completed_entry = entry.complete(response.clone());
+        expect_that!(completed_entry.fingerprint, eq(fingerprint));
+    }
+
+    #[gtest]
+    fn complete_idempotency_entry_preserve_ttl() {
+        let fingerprint = Fingerprint(0x1ab950a);
+        let ttl = Duration::from_nanos(1);
+        let entry = IdempotencyEntry::new(fingerprint, ttl);
+        expect_that!(entry.fingerprint, eq(fingerprint));
+        expect_that!(entry.state, pat!(Processing { .. }));
+        let response = CachedResponse {
+            status_code: 200,
+            metadata: Metadata::default(),
+            body: vec![].into(),
+        };
+        let completed_entry = entry.complete(response.clone());
+        expect_that!(completed_entry.ttl, eq(ttl));
     }
 
     #[gtest]

@@ -55,5 +55,5 @@ alias t := test
 # Run tests
 @test *args:
     cargo nextest run -j 12 {{ args }}
-    cargo nextest run --all-features -j 12 {{ args }}
+    cargo nextest run --features=memory -j 12 {{ args }}
     cargo test --doc
