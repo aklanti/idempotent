@@ -203,7 +203,7 @@ mod tests {
     #[gtest]
     fn new_idempotency_entry_always_in_processing_state() {
         let fingerprint = Fingerprint(0x1ab950a);
-        let entry = IdempotencyEntry::new(fingerprint.clone(), Duration::from_nanos(1));
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
         expect_that!(entry.fingerprint, eq(fingerprint));
         expect_that!(entry.state, pat!(Processing { .. }));
     }
@@ -211,7 +211,7 @@ mod tests {
     #[gtest]
     fn can_complete_processing_idempotency_entry() {
         let fingerprint = Fingerprint(0x1ab950a);
-        let entry = IdempotencyEntry::new(fingerprint.clone(), Duration::from_nanos(1));
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
         expect_that!(entry.fingerprint, eq(fingerprint));
         expect_that!(entry.state, pat!(Processing { .. }));
         let response = CachedResponse {
@@ -228,7 +228,7 @@ mod tests {
     #[gtest]
     fn entry_fingerprint_matches() {
         let fingerprint = Fingerprint(0x1ab950a);
-        let entry = IdempotencyEntry::new(fingerprint.clone(), Duration::from_nanos(1));
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
         assert_that!(entry.fingerprint_matches(fingerprint), eq(true))
     }
 
