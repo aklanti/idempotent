@@ -147,7 +147,7 @@ impl sealed::Sealed for Processing {}
 
 /// A token generated when a key is claimed
 ///
-/// It prevennts the zombie completions from overwriting a reclaimed key's result.
+/// It prevents the zombie completions from overwriting a reclaimed key's result.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct FencingToken(u64);
 
@@ -193,7 +193,7 @@ pub trait EntryState: sealed::Sealed {}
 mod tests {
     use std::time::Duration;
 
-    use googletest::matchers::{eq, pat};
+    use googletest::matchers::{eq, not, pat};
     use googletest::{expect_that, gtest};
 
     use super::*;
@@ -221,5 +221,12 @@ mod tests {
 
         let state = Completed { response };
         expect_that!(completed_entry.state, eq(&state));
+    }
+
+    #[gtest]
+    fn fencing_token_is_unique() {
+        let tok1 = FencingToken::new();
+        let tok2 = FencingToken::new();
+        expect_that!(tok1, not(eq(tok2)));
     }
 }
