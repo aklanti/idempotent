@@ -30,7 +30,8 @@ tracing = { version = "0.1", optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
-googletest = "0.14"
+googletest = { version = "0.14", features = ["proptest"] }
+proptest = "1.10.0"
 
 [lints.clippy]
 allow_attributes_without_reason = "warn"
