@@ -1,6 +1,9 @@
 //! Idempotency keys store
 
-use crate::entry::{Completed, FencingToken, IdempotencyEntry, Processing};
+#[cfg(feature = "memory")]
+pub mod memory;
+
+use crate::entry::{Completed, ExistingEntry, FencingToken, IdempotencyEntry, Processing};
 use crate::key::IdempotencyKey;
 
 /// A store trait
@@ -30,7 +33,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     ) -> Result<(), Self::Error>;
 
     /// Removes an idempotency entry
-    async fn remove(&mut self, key: &IdempotencyKey) -> Result<(), Self::Error>;
+    async fn remove(&self, key: &IdempotencyKey) -> Result<(), Self::Error>;
 }
 
 /// A result when attempting to claim an idempotency key
@@ -42,8 +45,8 @@ pub enum InsertResult {
     /// execute the handler
     Claimed {
         /// A fencing token to prevent zombie completion
-        fencing_token: u64,
+        fencing_token: FencingToken,
     },
     /// A key already exists
-    Exists,
+    Exists(ExistingEntry),
 }

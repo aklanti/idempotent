@@ -14,7 +14,7 @@ use super::fingerprint::Fingerprint;
 pub struct IdempotencyEntry<State: EntryState> {
     /// A hash of the original request
     ///
-    /// A fingerprint used to detect when a key is reused with different request body
+    /// A fingerprint used to detect a reused key with different request body
     pub fingerprint: Fingerprint,
     /// Time to live for this entry
     pub ttl: Duration,
@@ -24,6 +24,11 @@ pub struct IdempotencyEntry<State: EntryState> {
 
 impl IdempotencyEntry<Processing> {
     /// Creates a new idempotency entry in processing state
+    #[must_use]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "IdempotencyEntry::new", level=tracing::Level::INFO)
+    )]
     pub fn new(fingerprint: Fingerprint, ttl: Duration) -> Self {
         Self {
             state: Processing::new(),
@@ -57,12 +62,23 @@ impl IdempotencyEntry<Processing> {
             state: Completed { response },
         }
     }
+
+    #[must_use]
+    /// Return the fencing token
+    pub const fn fencing_token(&self) -> FencingToken {
+        self.state.fencing_token
+    }
 }
 
 impl IdempotencyEntry<Completed> {
     /// Returns the response body of a completed request
     pub const fn response(&self) -> &CachedResponse {
         &self.state.response
+    }
+
+    /// Consumes `self` and returns inner response
+    pub fn into_response(self) -> CachedResponse {
+        self.state.response
     }
 }
 
@@ -99,7 +115,7 @@ pub struct Metadata(HashMap<String, Vec<u8>>);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Processing {
     /// A claim fencing token
-    fencing_token: FencingToken,
+    pub(crate) fencing_token: FencingToken,
 }
 
 impl Processing {
@@ -117,17 +133,30 @@ impl Default for Processing {
     }
 }
 
+/// Existing entry in the  idempotency store
+#[derive(Debug, Clone)]
+pub enum ExistingEntry {
+    /// An in-flight request entry
+    Processing(IdempotencyEntry<Processing>),
+    /// A completed request entry
+    Completed(IdempotencyEntry<Completed>),
+}
+
 impl EntryState for Processing {}
 impl sealed::Sealed for Processing {}
 
 /// A token generated when a key is claimed
 ///
 /// It prevennts the zombie completions from overwriting a reclaimed key's result.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct FencingToken(u64);
 
 impl FencingToken {
     /// Creates a new fencing token
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name="FencingToken::new", level=tracing::Level::DEBUG, ret)
+    )]
     pub fn new() -> Self {
         Self(rand::random())
     }
@@ -140,7 +169,7 @@ impl Default for FencingToken {
 }
 
 /// The request handler has processed the request and the response is cached
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Completed {
     /// A cached response for a completed request
     response: CachedResponse,
