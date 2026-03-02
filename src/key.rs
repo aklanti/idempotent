@@ -50,7 +50,7 @@ impl fmt::Display for IdempotencyKey {
 
 #[cfg(test)]
 mod tests {
-    use googletest::matchers::{err, pat};
+    use googletest::matchers::{anything, err, pat};
     use googletest::{expect_that, gtest};
 
     use super::*;
@@ -58,12 +58,12 @@ mod tests {
     #[gtest]
     fn empty_key_is_rejected() {
         let result = IdempotencyKey::new("");
-        expect_that!(result, err(pat!(IdempotencyError::InvalidKey(..))));
+        expect_that!(result, err(pat!(IdempotencyError::InvalidKey(anything()))));
     }
 
     #[gtest]
     fn key_exceeding_max_len_rejected() {
         let result = IdempotencyKey::new("x".repeat(u16::MAX as usize));
-        expect_that!(result, err(pat!(IdempotencyError::InvalidKey(..))));
+        expect_that!(result, err(pat!(IdempotencyError::InvalidKey(anything()))));
     }
 }

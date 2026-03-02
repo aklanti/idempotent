@@ -90,7 +90,7 @@ impl IdempotencyStore for MemoryStore {
     }
 }
 
-/// A storage for the in-memory data
+/// A store for the in-memory data
 #[derive(Debug, Default)]
 struct StoreState {
     entries: HashMap<IdempotencyKey, StoreRecord>,
@@ -225,4 +225,153 @@ enum StoreAction {
         key: IdempotencyKey,
         reply: oneshot::Sender<()>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use googletest::matchers::{anything, pat};
+    use googletest::{expect_that, gtest};
+
+    use super::*;
+    use crate::entry::{CachedResponse, ExistingEntry, Metadata};
+    use crate::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
+
+    const SECONDS: u64 = 60;
+
+    #[gtest]
+    fn insert_vacant_return_a_claim_with_fencing_token() {
+        let mut store = StoreState::new();
+        let key = IdempotencyKey::new("chimamanda").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let result = store.try_insert(key, entry);
+        expect_that!(
+            result,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+    }
+
+    #[gtest]
+    fn insert_existing_processing_returns_existing_processing() {
+        let mut store = StoreState::new();
+        let key = IdempotencyKey::new("chimamanda").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+
+        let first = store.try_insert(key.clone(), entry.clone());
+        expect_that!(
+            first,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+
+        let second = store.try_insert(key, entry);
+        expect_that!(second, pat!(InsertResult::Exists(_)));
+    }
+    #[gtest]
+    fn insert_existing_completed_return_existing_completed() {
+        let mut store = StoreState::default();
+        let key = IdempotencyKey::new("lumumba").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let response = CachedResponse {
+            status_code: 200,
+            metadata: Metadata::default(),
+            body: vec![].into(),
+        };
+
+        let first = store.try_insert(key.clone(), entry.clone());
+        expect_that!(
+            first,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+
+        let InsertResult::Claimed { fencing_token } = first else {
+            return;
+        };
+
+        let completed = entry.complete(response);
+        store.complete(key.clone(), completed, fencing_token);
+
+        let second = store.try_insert(
+            key,
+            IdempotencyEntry::new(
+                DefaultFingerprintStrategy.compute("/submit", &[]),
+                Duration::from_secs(SECONDS),
+            ),
+        );
+        expect_that!(
+            second,
+            pat!(InsertResult::Exists(pat!(ExistingEntry::Completed(
+                anything()
+            ))))
+        );
+    }
+    #[gtest]
+    fn insert_on_expired_key_claims_entry() {
+        let mut store = StoreState::default();
+        let key = IdempotencyKey::new("lumumba").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::ZERO);
+
+        let first = store.try_insert(key.clone(), entry);
+        expect_that!(
+            first,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+
+        std::thread::sleep(Duration::from_millis(1));
+
+        let entry = IdempotencyEntry::new(fingerprint, Duration::ZERO);
+        let second = store.try_insert(key, entry);
+        expect_that!(
+            second,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+    }
+
+    #[gtest]
+    fn complete_with_mismatched_fencing_token_is_noop() {
+        let mut store = StoreState::default();
+        let key = IdempotencyKey::new("lumumba").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let response = CachedResponse {
+            status_code: 200,
+            metadata: Metadata::default(),
+            body: vec![].into(),
+        };
+
+        let first = store.try_insert(key.clone(), entry.clone());
+        expect_that!(
+            first,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+
+        let completed = entry.complete(response);
+        let wrong_token = FencingToken::new();
+        store.complete(key.clone(), completed, wrong_token);
+
+        let second = store.try_insert(
+            key,
+            IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS)),
+        );
+        expect_that!(
+            second,
+            pat!(InsertResult::Exists(pat!(ExistingEntry::Processing(
+                anything()
+            ))))
+        );
+    }
 }
