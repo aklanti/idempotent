@@ -42,7 +42,7 @@ mod tests {
             let strat = DefaultFingerprintStrategy;
             let a = strat.compute(&operation, &body);
             let b = strat.compute(&operation, &body);
-            expect_that!(a, eq(&b));
+            expect_that!(a, eq(b));
         }
 
         #[gtest]
@@ -57,7 +57,7 @@ mod tests {
             let strat = DefaultFingerprintStrategy;
             let f1 = strat.compute(&op_a, &body);
             let f2 = strat.compute(&op_b, &body);
-            expect_that!(f1, not(eq(&f2)));
+            expect_that!(f1, not(eq(f2)));
         }
 
         #[gtest]
@@ -74,7 +74,7 @@ mod tests {
             let strat = DefaultFingerprintStrategy;
             let f1 = strat.compute(&op, &body_a);
             let f2 = strat.compute(&op, &body_b);
-            expect_that!(f1, not(eq(&f2)));
+            expect_that!(f1, not(eq(f2)));
         }
 
     }
@@ -84,6 +84,6 @@ mod tests {
         let strat = DefaultFingerprintStrategy;
         let f1 = strat.compute("GET/ab", b"");
         let f2 = strat.compute("GET", b"/ab");
-        expect_that!(f1, not(eq(&f2)));
+        expect_that!(f1, not(eq(f2)));
     }
 }
