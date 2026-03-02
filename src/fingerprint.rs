@@ -49,15 +49,41 @@ mod tests {
         fn fingerprint_is_sensitive_to_operation(
             (op_a, op_b) in ("\\PC+", "\\PC+")
                 .prop_filter(
-                    "Value must be distinct",
+                    "value must be distinct",
                     |(op_a, op_b)| op_a != op_b
                 ),
                 body in collection::vec(arbitrary::any::<u8>(), 0..1024)
         ) {
-            let start = DefaultFingerprintStrategy;
-            let f1 = start.compute(&op_a, &body);
-            let f2 = start.compute(&op_b, &body);
+            let strat = DefaultFingerprintStrategy;
+            let f1 = strat.compute(&op_a, &body);
+            let f2 = strat.compute(&op_b, &body);
             expect_that!(f1, not(eq(&f2)));
         }
+
+        #[gtest]
+        fn fingerprint_is_sensitive_to_body(
+            op in "\\PC+",
+            (body_a, body_b) in (
+                collection::vec(arbitrary::any::<u8>(), 0..512),
+                collection::vec(arbitrary::any::<u8>(), 0..512)
+            ).prop_filter(
+                "body must be distinct",
+                |(a, b)| a != b
+            )
+        ) {
+            let strat = DefaultFingerprintStrategy;
+            let f1 = strat.compute(&op, &body_a);
+            let f2 = strat.compute(&op, &body_b);
+            expect_that!(f1, not(eq(&f2)));
+        }
+
+    }
+
+    #[gtest]
+    fn field_sepration_prevent_collision() {
+        let strat = DefaultFingerprintStrategy;
+        let f1 = strat.compute("GET/ab", b"");
+        let f2 = strat.compute("GET", b"/ab");
+        expect_that!(f1, not(eq(&f2)));
     }
 }
