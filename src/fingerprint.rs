@@ -3,7 +3,7 @@
 use xxhash_rust::xxh3;
 
 ///  A request fingerprint computed from the method, route and response's body
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fingerprint(pub(crate) u64);
 

@@ -84,7 +84,9 @@ impl IdempotencyEntry<Completed> {
 
 impl<State: EntryState> IdempotencyEntry<State> {
     /// Checks whether a request fingerprint matches this entry
-    /// It returns false when a client reuses an idempotency key with a different request body
+    ///
+    /// It returns false when a client reuses an idempotency key with
+    /// a different request body
     pub fn fingerprint_matches(&self, fingerprint: Fingerprint) -> bool {
         self.fingerprint == fingerprint
     }
@@ -119,7 +121,7 @@ pub struct Processing {
 }
 
 impl Processing {
-    /// Creates new processing  state
+    /// Creates new processing state
     pub fn new() -> Self {
         Self {
             fencing_token: FencingToken::new(),
@@ -133,7 +135,7 @@ impl Default for Processing {
     }
 }
 
-/// Existing entry in the  idempotency store
+/// Existing entry in the idempotency store
 #[derive(Debug, Clone)]
 pub enum ExistingEntry {
     /// An in-flight request entry
@@ -194,7 +196,7 @@ mod tests {
     use std::time::Duration;
 
     use googletest::matchers::{eq, not, pat};
-    use googletest::{expect_that, gtest};
+    use googletest::{assert_that, expect_that, gtest};
 
     use super::*;
 
@@ -202,7 +204,7 @@ mod tests {
     fn new_idempotency_entry_always_in_processing_state() {
         let fingerprint = Fingerprint(0x1ab950a);
         let entry = IdempotencyEntry::new(fingerprint.clone(), Duration::from_nanos(1));
-        expect_that!(entry.fingerprint, eq(&fingerprint));
+        expect_that!(entry.fingerprint, eq(fingerprint));
         expect_that!(entry.state, pat!(Processing { .. }));
     }
 
@@ -210,7 +212,7 @@ mod tests {
     fn can_complete_processing_idempotency_entry() {
         let fingerprint = Fingerprint(0x1ab950a);
         let entry = IdempotencyEntry::new(fingerprint.clone(), Duration::from_nanos(1));
-        expect_that!(entry.fingerprint, eq(&fingerprint));
+        expect_that!(entry.fingerprint, eq(fingerprint));
         expect_that!(entry.state, pat!(Processing { .. }));
         let response = CachedResponse {
             status_code: 200,
@@ -221,6 +223,13 @@ mod tests {
 
         let state = Completed { response };
         expect_that!(completed_entry.state, eq(&state));
+    }
+
+    #[gtest]
+    fn entry_fingerprint_matches() {
+        let fingerprint = Fingerprint(0x1ab950a);
+        let entry = IdempotencyEntry::new(fingerprint.clone(), Duration::from_nanos(1));
+        assert_that!(entry.fingerprint_matches(fingerprint), eq(true))
     }
 
     #[gtest]
