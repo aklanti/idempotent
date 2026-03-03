@@ -1,0 +1,57 @@
+:crates-badge: https://img.shields.io/crates/v/idempotent
+:crates-url: https://crates.io/crates/idempotent
+:docs-badge: https://img.shields.io/docsrs/idempotent/latest
+:docs-url: https://docs.rs/idempotent/latest/idempotent
+:mpl-2.0-badge: https://img.shields.io/badge/License-MPL
+:mpl-2.0-license: LICENSE
+:actions-badge: https://github.com/aklanti/idempotent/workflows/CI/badge.svg
+:actions-url: https://github.com/aklanti/idempotent/actions/workflows/main.yaml
+:serde-serialize: https://docs.rs/serde/1/serde/trait.Serialize.html
+:serde-deserialize: https://docs.rs/serde/1/serde/trait.Deserialize.html
+
+
+image:{actions-badge}[Build Status,link={actions-url}]
+image:{crates-badge}[Crates.io,link={crates-url}]
+image:{docs-badge}[Documentation,link={docs-urls}]
+image:{mpl-2.0-badge}[MPL-2.0 license,link={mpl-2.0-license}]
+
+= idempotent
+
+Idempotency library with at-most-once execution and response caching.
+
+== Features
+
+**Typestate entries::** `Processing` → `Completed` enforced at compile time
+**Pluggable stores::** an in-memory suitable for development or single node deployment
+**Fencing tokens::** prevents stale completions after key expiry and reclaim
+**Fingerprint matching::** detects mismatched request bodies under the same key
+
+
+== Usage
+
+Add to your `Cargo.toml`
+
+[source,toml]
+----
+[dependencies]
+idempotency = { version = "0.1.0", features = ["memory"] }
+----
+
+== Optional Features
+
+**serde::** adds {serde-serialize}[`Serialize`] and {serde-deserialize}[`Deserialize`] to idempotency key and entries
+
+=== Supported Rust versions
+
+The minimum supported Rust version is **1.93.0**.
+
+=== License
+
+Unless otherwise noted, this project is licensed under the {LICENSE}[Mozilla Public License Version 2.0.].
+
+=== Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in `idempotent` by you, shall be licensed as MPL-2.0, without any additional
+terms or conditions.
+
