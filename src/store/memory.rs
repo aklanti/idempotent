@@ -229,7 +229,7 @@ enum StoreAction {
 
 #[cfg(test)]
 mod tests {
-    use googletest::matchers::{anything, pat};
+    use googletest::matchers::{anything, eq, pat};
     use googletest::{expect_that, gtest};
 
     use super::*;
@@ -373,5 +373,88 @@ mod tests {
                 anything()
             ))))
         );
+    }
+
+    #[gtest]
+    fn remove_allows_reinsert() {
+        let mut store = StoreState::default();
+        let key = IdempotencyKey::new("lumumba").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+
+        let first = store.try_insert(key.clone(), entry);
+        expect_that!(
+            first,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+
+        store.remove(&key);
+
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let second = store.try_insert(key, entry);
+        expect_that!(
+            second,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+    }
+
+    #[gtest]
+    fn remove_nonexistent_is_ok() {
+        let mut store = StoreState::default();
+        let key = IdempotencyKey::new("ghost").expect("valid key");
+        store.remove(&key);
+    }
+
+    impl StoreState {
+        fn contains(&self, key: &IdempotencyKey) -> bool {
+            self.entries.contains_key(key)
+        }
+    }
+
+    #[gtest]
+    fn sweep_removes_expired() {
+        let mut store = StoreState::default();
+        let key = IdempotencyKey::new("lumumba").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::ZERO);
+
+        let first = store.try_insert(key.clone(), entry);
+        expect_that!(
+            first,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+
+        std::thread::sleep(Duration::from_millis(1));
+        store.sweep();
+
+        expect_that!(store.contains(&key), eq(false));
+    }
+
+    #[gtest]
+    fn sweep_keeps_live() {
+        let mut store = StoreState::default();
+        let key = IdempotencyKey::new("lumumba").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+
+        let first = store.try_insert(key.clone(), entry);
+        expect_that!(
+            first,
+            pat!(InsertResult::Claimed {
+                fencing_token: anything()
+            })
+        );
+
+        store.sweep();
+
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let second = store.try_insert(key, entry);
+        expect_that!(second, pat!(InsertResult::Exists(_)));
     }
 }
