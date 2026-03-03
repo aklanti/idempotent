@@ -633,4 +633,52 @@ mod tests {
         expect_that!(claimed, eq(1));
         expect_that!(existed, eq(9));
     }
+
+    #[tokio::test]
+    #[gtest]
+    async fn complete_under_contention() {
+        let store = Arc::new(MemoryStore::new(16, Duration::from_secs(SECONDS)));
+        let key = IdempotencyKey::new("sankara").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/one-africa", &[]);
+        let response = CachedResponse {
+            status_code: 200,
+            metadata: Metadata::default(),
+            body: Bytes::from_static(b"ok"),
+        };
+
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let InsertResult::Claimed { fencing_token } = store
+            .try_insert(&key, entry.clone())
+            .await
+            .expect("to insert entry")
+        else {
+            panic!("expected claimed result");
+        };
+
+        let completed = entry.complete(response);
+        store
+            .complete(&key, completed, fencing_token)
+            .await
+            .expect("to complete side effect");
+        let mut handles = Vec::with_capacity(10);
+
+        for _ in 0..10 {
+            let key = key.clone();
+            let store = Arc::clone(&store);
+            let handle = tokio::spawn(async move {
+                let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+                store.try_insert(&key, entry).await.expect("to succeed")
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let result = handle.await.expect("to get a result");
+            let InsertResult::Exists(ExistingEntry::Completed(entry)) = result else {
+                panic!("expected existing completed entry");
+            };
+
+            expect_that!(entry.response().status_code, eq(200));
+        }
+    }
 }
