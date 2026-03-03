@@ -229,6 +229,8 @@ enum StoreAction {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use bytes::Bytes;
     use googletest::matchers::{anything, eq, ok, pat};
     use googletest::{expect_that, gtest};
@@ -597,5 +599,38 @@ mod tests {
                 fencing_token: anything()
             }))
         );
+    }
+
+    #[tokio::test]
+    #[gtest]
+    async fn concurrent_insert_one_wins() {
+        let store = Arc::new(MemoryStore::new(16, Duration::from_secs(SECONDS)));
+        let key = IdempotencyKey::new("makeba").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/force", &[]);
+
+        let mut handles = Vec::with_capacity(10);
+
+        for _ in 0..10 {
+            let store = Arc::clone(&store);
+            let key = key.clone();
+            let handle = tokio::spawn(async move {
+                let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+                store.try_insert(&key, entry).await.expect("to succeed")
+            });
+            handles.push(handle);
+        }
+
+        let mut claimed = 0;
+        let mut existed = 0;
+
+        for handle in handles {
+            match handle.await.expect("to get a result") {
+                InsertResult::Claimed { .. } => claimed += 1,
+                InsertResult::Exists(..) => existed += 1,
+            }
+        }
+
+        expect_that!(claimed, eq(1));
+        expect_that!(existed, eq(9));
     }
 }
