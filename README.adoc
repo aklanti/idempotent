@@ -47,7 +47,7 @@ The minimum supported Rust version is **1.93.0**.
 
 === License
 
-Unless otherwise noted, this project is licensed under the {LICENSE}[Mozilla Public License Version 2.0.].
+Unless otherwise noted, this project is licensed under the {mpl-2.0-license}[Mozilla Public License Version 2.0.].
 
 === Contribution
 
