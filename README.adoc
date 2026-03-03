@@ -1,11 +1,15 @@
 :badge-crate: https://img.shields.io/crates/v/idempotent
 :url-crate: https://crates.io/crates/idempotent
+
 :bagde-docs: https://img.shields.io/docsrs/idempotent/latest
 :url-docs: https://docs.rs/idempotent/latest/idempotent
+
 :badge-license: https://img.shields.io/badge/License-MPL_2.0-blue.svg
 :url-license: LICENSE
+
 :badge-actions: https://github.com/aklanti/idempotent/workflows/CI/badge.svg
 :url-actions: https://github.com/aklanti/idempotent/actions/workflows/main.yaml
+
 :url-serde-serialize: https://docs.rs/serde/1/serde/trait.Serialize.html
 :url-serde-deserialize: https://docs.rs/serde/1/serde/trait.Deserialize.html
 
@@ -47,7 +51,7 @@ The minimum supported Rust version is **1.93.0**.
 
 === License
 
-Unless otherwise noted, this project is licensed under the {url-license}[Mozilla Public License Version 2.0.].
+Unless otherwise noted, this project is licensed under the link:{url-license}[Mozilla Public License Version 2.0.].
 
 === Contribution
 
