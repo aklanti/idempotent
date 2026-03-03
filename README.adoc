@@ -2,7 +2,7 @@
 :crates-url: https://crates.io/crates/idempotent
 :docs-badge: https://img.shields.io/docsrs/idempotent/latest
 :docs-url: https://docs.rs/idempotent/latest/idempotent
-:mpl-2.0-badge: https://img.shields.io/badge/License-MPL
+:mpl-2.0-badge: https://img.shields.io/badge/License-MPL_2.0-blue.svg
 :mpl-2.0-license: LICENSE
 :actions-badge: https://github.com/aklanti/idempotent/workflows/CI/badge.svg
 :actions-url: https://github.com/aklanti/idempotent/actions/workflows/main.yaml
