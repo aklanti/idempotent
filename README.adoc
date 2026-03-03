@@ -1,7 +1,7 @@
 :badge-crate: https://img.shields.io/crates/v/idempotent
 :url-crate: https://crates.io/crates/idempotent
 
-:bagde-docs: https://img.shields.io/docsrs/idempotent/latest
+:badge-docs: https://img.shields.io/docsrs/idempotent/latest
 :url-docs: https://docs.rs/idempotent/latest/idempotent
 
 :badge-license: https://img.shields.io/badge/License-MPL_2.0-blue.svg
@@ -51,7 +51,7 @@ The minimum supported Rust version is **1.93.0**.
 
 === License
 
-Unless otherwise noted, this project is licensed under the link:{url-license}[Mozilla Public License Version 2.0.].
+Unless otherwise noted, this project is licensed under the link:{url-license}[Mozilla Public License Version 2.0].
 
 === Contribution
 
