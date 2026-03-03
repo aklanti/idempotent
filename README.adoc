@@ -21,10 +21,10 @@ Idempotency library with at-most-once execution and response caching.
 
 == Features
 
-**Typestate entries::** `Processing` → `Completed` enforced at compile time
-**Pluggable stores::** an in-memory suitable for development or single node deployment
-**Fencing tokens::** prevents stale completions after key expiry and reclaim
-**Fingerprint matching::** detects mismatched request bodies under the same key
+**Typestate entries**:: `Processing` → `Completed` enforced at compile time
+**Pluggable stores**:: an in-memory suitable for development or single node deployment
+**Fencing tokens**:: prevents stale completions after key expiry and reclaim
+**Fingerprint matching**:: detects mismatched request bodies under the same key
 
 
 == Usage
@@ -39,7 +39,7 @@ idempotency = { version = "0.1.0", features = ["memory"] }
 
 == Optional Features
 
-**serde::** adds {serde-serialize}[`Serialize`] and {serde-deserialize}[`Deserialize`] to idempotency key and entries
+**serde**:: adds {serde-serialize}[`Serialize`] and {serde-deserialize}[`Deserialize`] to idempotency key and entries
 
 === Supported Rust versions
 
