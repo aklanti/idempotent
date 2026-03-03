@@ -1,19 +1,19 @@
-:crates-badge: https://img.shields.io/crates/v/idempotent
-:crates-url: https://crates.io/crates/idempotent
-:docs-badge: https://img.shields.io/docsrs/idempotent/latest
-:docs-url: https://docs.rs/idempotent/latest/idempotent
-:mpl-2.0-badge: https://img.shields.io/badge/License-MPL_2.0-blue.svg
-:mpl-2.0-license: LICENSE
-:actions-badge: https://github.com/aklanti/idempotent/workflows/CI/badge.svg
-:actions-url: https://github.com/aklanti/idempotent/actions/workflows/main.yaml
-:serde-serialize: https://docs.rs/serde/1/serde/trait.Serialize.html
-:serde-deserialize: https://docs.rs/serde/1/serde/trait.Deserialize.html
+:badge-crate: https://img.shields.io/crates/v/idempotent
+:url-crate: https://crates.io/crates/idempotent
+:bagde-docs: https://img.shields.io/docsrs/idempotent/latest
+:url-docs: https://docs.rs/idempotent/latest/idempotent
+:badge-license: https://img.shields.io/badge/License-MPL_2.0-blue.svg
+:url-license: LICENSE
+:badge-actions: https://github.com/aklanti/idempotent/workflows/CI/badge.svg
+:url-actions: https://github.com/aklanti/idempotent/actions/workflows/main.yaml
+:url-serde-serialize: https://docs.rs/serde/1/serde/trait.Serialize.html
+:url-serde-deserialize: https://docs.rs/serde/1/serde/trait.Deserialize.html
 
 
-image:{actions-badge}[Build Status,link={actions-url}]
-image:{crates-badge}[Crates.io,link={crates-url}]
-image:{docs-badge}[Documentation,link={docs-urls}]
-image:{mpl-2.0-badge}[MPL-2.0 license,link={mpl-2.0-license}]
+image:{badge-actions}[Build Status,link={url-actions}]
+image:{badge-crate}[Crates.io,link={url-crate}]
+image:{badge-docs}[Documentation,link={url-docs}]
+image:{badge-license}[MPL-2.0 license,link={url-license}]
 
 = idempotent
 
@@ -39,7 +39,7 @@ idempotency = { version = "0.1.0", features = ["memory"] }
 
 == Optional Features
 
-**serde**:: adds {serde-serialize}[`Serialize`] and {serde-deserialize}[`Deserialize`] to idempotency key and entries
+**serde**:: adds {url-serde-serialize}[`Serialize`] and {url-serde-deserialize}[`Deserialize`] to idempotency key and entries
 
 === Supported Rust versions
 
@@ -47,7 +47,7 @@ The minimum supported Rust version is **1.93.0**.
 
 === License
 
-Unless otherwise noted, this project is licensed under the {mpl-2.0-license}[Mozilla Public License Version 2.0.].
+Unless otherwise noted, this project is licensed under the {url-license}[Mozilla Public License Version 2.0.].
 
 === Contribution
 
