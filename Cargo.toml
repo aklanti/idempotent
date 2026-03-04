@@ -1,6 +1,6 @@
 [package]
 name = "idempotent"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Sede Soukossi"]
 description = "Type-safe idempotency keys for building reliable, retry-safe APIs"
