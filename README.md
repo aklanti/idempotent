@@ -20,7 +20,7 @@ Add to your `Cargo.toml`
 
 ```toml
 [dependencies]
-idempotency = { version = "0.1.2", features = ["memory"] }
+idempotency = { version = "0.2.0", features = ["memory"] }
 ```
 
 ## Optional Features
