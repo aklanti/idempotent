@@ -48,9 +48,16 @@ impl fmt::Display for IdempotencyKey {
     }
 }
 
+#[cfg(feature = "uuid")]
+impl Default for IdempotencyKey {
+    fn default() -> Self {
+        Self(uuid::Uuid::new_v4().into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use googletest::matchers::{anything, err, pat};
+    use googletest::matchers::{anything, err, ok, pat};
     use googletest::{expect_that, gtest};
 
     use super::*;
@@ -65,5 +72,13 @@ mod tests {
     fn key_exceeding_max_len_rejected() {
         let result = IdempotencyKey::new("x".repeat(u16::MAX as usize));
         expect_that!(result, err(pat!(IdempotencyError::InvalidKey(anything()))));
+    }
+
+    #[cfg(feature = "uuid")]
+    #[gtest]
+    fn default_key_is_valid_uuid() {
+        let key = IdempotencyKey::default();
+        let parsed = uuid::Uuid::parse_str(key.as_str());
+        expect_that!(parsed, ok(anything()));
     }
 }

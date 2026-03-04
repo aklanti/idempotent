@@ -14,10 +14,12 @@ categories = ["web-programming", "data-structures"]
 features = ["memory", "serde", "tracing", "tokio"]
 
 [features]
+default = ["uuid"]
 memory = ["tokio"]
 serde = ["dep:serde"]
 tracing = ["dep:tracing"]
 tokio = ["dep:tokio"]
+uuid = ["dep:uuid"]
 
 [dependencies]
 async-trait = "0.1"
@@ -27,6 +29,7 @@ serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 tokio = { version = "1.49", optional = true, features = ["sync", "time", "rt-multi-thread", "macros"] }
 tracing = { version = "0.1", optional = true }
+uuid = { version = "1.21.0", features = ["serde", "v4"], optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
