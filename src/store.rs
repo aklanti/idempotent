@@ -2,6 +2,8 @@
 
 #[cfg(feature = "memory")]
 pub mod memory;
+#[cfg(feature = "valkey")]
+pub mod valkey;
 
 use crate::entry::{Completed, ExistingEntry, FencingToken, IdempotencyEntry, Processing};
 use crate::key::IdempotencyKey;
