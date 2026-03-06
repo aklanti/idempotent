@@ -6,7 +6,7 @@ authors = ["Sede Soukossi"]
 description = "Type-safe idempotency keys for building reliable, retry-safe APIs"
 license = "MPL-2.0"
 repository = "https://github.com/aklanti/idempotent"
-rust-version = "1.93.0"
+rust-version = "1.94.0"
 keywords = ["idempotency", "idempotent", "api", "retry", "deduplication"]
 categories = ["web-programming", "data-structures"]
 
@@ -20,28 +20,32 @@ serde = ["dep:serde"]
 tracing = ["dep:tracing"]
 tokio = ["dep:tokio"]
 uuid = ["dep:uuid"]
-valkey = ["dep:redis"]
+valkey = ["dep:redis", "dep:postcard"]
 
 [dependencies]
 async-trait = "0.1"
 bytes = { version = "1", features = ["serde"] }
+postcard = { version = "1", optional = true, features = ["alloc"] }
 rand = "0.10"
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
-tokio = { version = "1.49", optional = true, features = ["sync", "time", "rt-multi-thread", "macros"] }
+tokio = { version = "1", optional = true, features = ["sync", "time", "rt-multi-thread", "macros"] }
 tracing = { version = "0.1", optional = true }
-uuid = { version = "1.21.0", features = ["serde", "v4"], optional = true }
+uuid = { version = "1", features = ["serde", "v4"], optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dependencies.redis]
 version = "1"
 default-features = false
-features = ["aio", "tokio-rustls-comp", "script", "uuid"]
+features = ["aio", "connection-manager", "tokio-rustls-comp", "script", "uuid"]
 optional = true 
 
 [dev-dependencies]
 googletest = { version = "0.14", features = ["proptest"] }
 proptest = "1.10"
+testcontainers = "0.27.1"
+# testcontainers = "0.27.1"
+testcontainers-modules = { version = "0.15.0", features = ["valkey"] }
 
 [lints.clippy]
 allow_attributes_without_reason = "warn"

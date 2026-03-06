@@ -151,7 +151,8 @@ impl sealed::Sealed for Processing {}
 ///
 /// It prevents the zombie completions from overwriting a reclaimed key's result.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct FencingToken(u64);
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FencingToken(pub(crate) u64);
 
 impl FencingToken {
     /// Creates a new fencing token

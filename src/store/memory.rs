@@ -512,13 +512,12 @@ mod tests {
             body: Bytes::from_static(b"ok"),
         };
 
-        let first = store.try_insert(&key, entry).await;
+        let first = store.try_insert(&key, entry.clone()).await;
         let InsertResult::Claimed { fencing_token } = first.expect("an insertion result") else {
             return;
         };
 
-        let completed = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS))
-            .complete(response.clone());
+        let completed = entry.complete(response.clone());
         store
             .complete(&key, completed, fencing_token)
             .await
@@ -527,7 +526,7 @@ mod tests {
         let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
         let replay = store.try_insert(&key, entry).await;
         let Ok(InsertResult::Exists(ExistingEntry::Completed(entry))) = replay else {
-            panic!("expected Exists(Completed), got {:?}", replay);
+            panic!("expected Exists(Completed), got {replay:?}");
         };
         let response = entry.response();
         expect_that!(response.status_code, eq(201));
