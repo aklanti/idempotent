@@ -12,7 +12,7 @@ Idempotency library with at-most-once execution and response caching.
 - **Typestate entries:** `Processing` → `Completed` is checked at compile time, so you can't forget to complete an entry or complete one twice
 - **Pluggable stores:** comes with an in-memory store and a Valkey/Redis store; implement [`IdempotencyStore`][url-docs-store] for your own backend
 - **Fencing tokens:** rejects stale completions when a key expires and gets reclaimed while the original request is still running
-- **Fingerprint matching:** returns a conflict when a retry carries a different request body than the original
+- **Fingerprint matching:** returns a conflict when a retry carries a different request body than the original; ships with an xxHash-based default, implement `FingerprintStrategy` for your own
 - **UUID keys by default:** `IdempotencyKey::default()` generates a random UUID v4
 
 ## Usage
@@ -29,18 +29,21 @@ idempotent = { version = "0.3.0", features = ["memory"] }
 ```rust
 use idempotent::{
     IdempotencyKey, IdempotencyEntry, IdempotencyStore,
-    InsertResult, Processing, Completed, CachedResponse,
+    InsertResult, CachedResponse,
 };
+use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
 use idempotent::memory::MemoryStore;
 
 let store = MemoryStore::new();
 let key = IdempotencyKey::default();
+
+let fingerprint = DefaultFingerprintStrategy.compute("POST /credentials/issue", b"VerifiableCredential");
 let entry = IdempotencyEntry::new(fingerprint);
 
 match store.try_insert(&key, entry).await? {
-    InsertResult::Claimed { fencing_token } => {
-        // Execute your side effect (e.g. charge a payment)
-        let response = handle_request().await;
+    InsertResult::Claimed { fencing_token, entry } => {
+        // Execute your side effect (e.g. issue a verifiable credential)
+        let response = issue_credential().await;
 
         let completed = entry.complete(CachedResponse::from(response));
         store.complete(&key, completed, fencing_token).await?;
