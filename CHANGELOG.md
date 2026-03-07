@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0](https://github.com/aklanti/idempotent/compare/v0.2.0...v0.3.0) - 2026-03-06
+## [0.3.0](https://github.com/aklanti/idempotent/compare/v0.2.0...v0.3.0) - 2026-03-07
 
 ### Features
 
