@@ -34,8 +34,8 @@ use idempotent::{
 use idempotent::memory::MemoryStore;
 
 let store = MemoryStore::new();
-let key = IdempotencyKey::new("550e8400-e29b-41d4-a716-446655440000")?;
-let entry = IdempotencyEntry::<Processing>::new(fingerprint);
+let key = IdempotencyKey::default();
+let entry = IdempotencyEntry::new(fingerprint);
 
 match store.try_insert(&key, entry).await? {
     InsertResult::Claimed { fencing_token } => {
