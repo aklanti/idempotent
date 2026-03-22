@@ -1,7 +1,7 @@
-//! This crate provides an idempotency abstraction.
+//! At-most-once execution of side effects.
 //!
-//! The fundamental invariant is that for a given idempotency key, the side effect must be executed **at most once**,
-//! and the response MUST be returned **at least once** (to every request bearing that key within the TTL window)
+//! For a given idempotency key the side effect runs at most once,
+//! and every retry within the TTL window receives the cached response.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod config;

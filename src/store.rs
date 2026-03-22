@@ -1,4 +1,4 @@
-//! Idempotency keys store
+//! Idempotency store trait and result types.
 
 #[cfg(feature = "memory")]
 pub mod memory;
@@ -8,10 +8,10 @@ pub mod valkey;
 use crate::entry::{Completed, ExistingEntry, FencingToken, IdempotencyEntry, Processing};
 use crate::key::IdempotencyKey;
 
-/// A store trait
+/// Trait for idempotency entry storage backends.
 #[async_trait::async_trait]
 pub trait IdempotencyStore: Send + Sync + 'static {
-    /// The error when interaction with an idempotency store
+    /// The error type returned by store operations.
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Attempt to claim an idempotency key
@@ -26,7 +26,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
 
     /// Marks a claimed key as completed with a cached response.
     ///
-    /// The fencing token must match the one returns by [`Self::try_insert`]
+    /// The fencing token must match the one returned by [`Self::try_insert`].
     async fn complete(
         &self,
         key: &IdempotencyKey,
@@ -38,7 +38,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     async fn remove(&self, key: &IdempotencyKey) -> Result<(), Self::Error>;
 }
 
-/// A result when attempting to claim an idempotency key
+/// The result of [`IdempotencyStore::try_insert`].
 #[derive(Debug, Clone)]
 pub enum InsertResult {
     /// A key is successfully claimed

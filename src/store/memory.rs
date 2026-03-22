@@ -1,4 +1,4 @@
-//! This module define the in-memory store
+//! In-memory idempotency store.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -10,15 +10,16 @@ use super::{IdempotencyStore, InsertResult};
 use crate::entry::{Completed, ExistingEntry, FencingToken, IdempotencyEntry, Processing};
 use crate::key::IdempotencyKey;
 
-/// In-memory idempotency entry store
+/// An in-memory [`IdempotencyStore`] backed by a `HashMap`.
+///
+/// Entries are automatically swept at the configured interval.
 pub struct MemoryStore {
     tx: mpsc::Sender<StoreAction>,
 }
 
 impl MemoryStore {
-    /// Creates a new memory store
-    ///
-    /// It also spawns a background task that processes each storage action
+    /// Creates a new `MemoryStore` and spawns a background task for
+    /// processing store actions and sweeping expired entries.
     #[cfg_attr(feature = "tracing", tracing::instrument(name = "MemoryStore::new"))]
     pub fn new(buffer: usize, sweep_interval: Duration) -> Self {
         let (tx, rx) = mpsc::channel(buffer);
@@ -90,7 +91,6 @@ impl IdempotencyStore for MemoryStore {
     }
 }
 
-/// A store for the in-memory data
 #[derive(Debug, Default)]
 struct StoreState {
     entries: HashMap<IdempotencyKey, StoreRecord>,
@@ -192,7 +192,7 @@ impl StoreState {
     }
 }
 
-/// Represent the idempotency entry data stored in the memory
+/// A record stored in the in-memory map, pairing an entry with its expiry.
 #[derive(Debug)]
 struct StoreRecord {
     existing: ExistingEntry,
@@ -206,7 +206,7 @@ impl StoreRecord {
         self.created_at.elapsed() >= self.ttl
     }
 }
-/// Actions to perform to perform on the memory store
+/// Message sent to the background store task.
 enum StoreAction {
     /// Insertion attempt request
     TryInsert {

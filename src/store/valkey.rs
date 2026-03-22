@@ -1,10 +1,9 @@
-//! Idempotency store for distributed deployment backed by Valkey or Redis
+//! Valkey / Redis idempotency store.
 //!
-//! Uses a shared backend so entries are visible across all nodes. Claiming
-//! and completing entries are atomic using a single Lua round-trips with no TOCTOU
-//! risk. The idempotency entries expiration is handled by native TTL;
+//! Claiming and completing are atomic via Lua scripts with no TOCTOU risk.
+//! Expiration uses native key TTL.
 //!
-//! The server configuration must have AOF persistence enabled (`appendonly yes`) and
+//! The server must have AOF persistence enabled (`appendonly yes`) and
 //! eviction disabled (`maxmemory-policy noeviction`). Silent eviction under
 //! memory pressure breaks the at-most-once guarantee.
 
@@ -22,23 +21,21 @@ use crate::entry::{
 use crate::fingerprint::Fingerprint;
 use crate::key::IdempotencyKey;
 
-/// Idempotency store backed by Valkey or Redis.
+/// An [`IdempotencyStore`] backed by Valkey or Redis.
 ///
-/// See [module-level documentation](self) for the confiration
+/// See the [module-level documentation](self) for server requirements.
 pub struct ValkeyStore {
-    /// A connector to the server
     conn: ConnectionManager,
-    /// Key prefix to allow multiple services to share the same Valkey
-    /// service without collisions
+    /// Optional key prefix for multi-tenant deployments.
     pub key_prefix: Option<String>,
 }
 
 impl ValkeyStore {
-    /// Lua script for atomic key claiming. It returns `nil` if claimed
-    /// successfully or the existing entry bytes if the key is taken
+    /// Lua script for atomic key claiming. Returns `nil` on success
+    /// or the existing entry bytes if the key is already taken.
     const CLAIM_SCRIPT: &str = include_str!("valkey/scripts/claim.lua");
-    /// Lua script for atomic entry completion. It verify the fencing token before
-    /// overwriting and reject stale completions from zombie handlers.
+    /// Lua script for atomic entry completion. Verifies the fencing token
+    /// and rejects stale completions.
     const COMPLETE_SCRIPT: &str = include_str!("valkey/scripts/complete.lua");
 
     /// Creates a new store instance without key prefix
@@ -46,7 +43,7 @@ impl ValkeyStore {
         Self::with_prefix(client, None).await
     }
 
-    /// Creates a new store instance with prefix key
+    /// Creates a new `ValkeyStore` with an optional key prefix.
     pub async fn with_prefix(
         client: Client,
         key_prefix: Option<&str>,
@@ -155,7 +152,7 @@ struct WireEntry {
 }
 
 impl WireEntry {
-    /// Serializes the wire entry with a version byte prefix followed by the paylaod
+    /// Serializes the wire entry with a version byte prefix followed by the payload.
     fn to_bytes(&self) -> Result<Vec<u8>, ValkeyError> {
         let payload = postcard::to_allocvec(self)?;
         let mut buf = Vec::with_capacity(1 + payload.len());
@@ -259,14 +256,14 @@ enum WireVersion {
     V1 = 1,
 }
 
-/// Errors from [`ValkeyStore`] operations
+/// Errors returned by [`ValkeyStore`] operations.
 #[derive(Debug, thiserror::Error)]
 pub enum ValkeyError {
-    /// A transient network issue, a retry may help
+    /// A connection or network error.
     #[error("connection error")]
     Connection(#[source] Box<dyn std::error::Error + Send + Sync>),
-    /// A data corruption error
-    #[error("wire format error")]
+    /// The stored entry could not be decoded.
+    #[error("decode error")]
     Decode(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 impl From<RedisError> for ValkeyError {

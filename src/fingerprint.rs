@@ -1,19 +1,19 @@
-//! This module defines the request fingerprint type
+//! Request fingerprinting.
 
 use xxhash_rust::xxh3;
 
-///  A request fingerprint computed from the method, route and response's body
+/// A hash of the request operation and body.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fingerprint(pub(crate) u64);
 
-/// Fingerprint computation strategy
+/// Trait for computing request fingerprints.
 pub trait FingerprintStrategy: Send + Sync + 'static {
-    /// Compute fingerprint
+    /// Computes a fingerprint from `operation` and `body`.
     fn compute(&self, operation: &str, body: &[u8]) -> Fingerprint;
 }
 
-/// The default fingerprint strategy
+/// Default strategy using xxHash3.
 pub struct DefaultFingerprintStrategy;
 
 impl FingerprintStrategy for DefaultFingerprintStrategy {

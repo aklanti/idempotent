@@ -1,6 +1,6 @@
-//! This module defines the data structures that track the state of an idempotent request.
+//! Idempotency entry types.
 //!
-//! These types are storage agnostic, and carry no timestamp or persistency concerns.
+//! These types are storage-agnostic and carry no timestamp or persistence concerns.
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -8,13 +8,11 @@ use bytes::Bytes;
 
 use super::fingerprint::Fingerprint;
 
-/// An idempotency tracking entry
+/// An idempotency entry, parameterised by [`Processing`] or [`Completed`].
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IdempotencyEntry<State: EntryState> {
-    /// A hash of the original request
-    ///
-    /// A fingerprint used to detect a reused key with different request body
+    /// Hash of the original request, used to detect key reuse with a different body.
     pub fingerprint: Fingerprint,
     /// Time to live for this entry
     pub ttl: Duration,
@@ -37,7 +35,7 @@ impl IdempotencyEntry<Processing> {
         }
     }
 
-    /// Creates a new idempotency entry in a completed state
+    /// Completes this entry, consuming it and returning a `Completed` entry.
     ///
     /// # Examples:
     ///
@@ -63,49 +61,45 @@ impl IdempotencyEntry<Processing> {
         }
     }
 
+    /// Returns the fencing token for this entry.
     #[must_use]
-    /// Return the fencing token
     pub const fn fencing_token(&self) -> FencingToken {
         self.state.fencing_token
     }
 }
 
 impl IdempotencyEntry<Completed> {
-    /// Returns the response body of a completed request
+    /// Returns a reference to the cached response.
     pub const fn response(&self) -> &CachedResponse {
         &self.state.response
     }
 
-    /// Consumes `self` and returns inner response
+    /// Consumes the entry, returning the cached response.
     pub fn into_response(self) -> CachedResponse {
         self.state.response
     }
 }
 
 impl<State: EntryState> IdempotencyEntry<State> {
-    /// Checks whether a request fingerprint matches this entry
-    ///
-    /// It returns false when a client reuses an idempotency key with
-    /// a different request body
+    /// Returns `true` if `fingerprint` matches this entry's fingerprint.
     pub fn fingerprint_matches(&self, fingerprint: Fingerprint) -> bool {
         self.fingerprint == fingerprint
     }
 }
 
-impl IdempotencyEntry<Completed> {}
-/// A cached response with a completed idempotency key
+/// A cached response for a completed idempotency entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CachedResponse {
-    /// Response status code
+    /// The status code.
     pub status_code: u16,
-    /// A response metadata
+    /// Response metadata such as headers.
     pub metadata: Metadata,
-    /// Raw response body
+    /// The response body.
     pub body: Bytes,
 }
 
-/// A data structure representing a response metadata
+/// Response metadata stored as string-keyed byte values.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Metadata(HashMap<String, Vec<u8>>);
@@ -135,21 +129,21 @@ impl Default for Processing {
     }
 }
 
-/// Existing entry in the idempotency store
+/// An entry that already exists in the store.
 #[derive(Debug, Clone)]
 pub enum ExistingEntry {
-    /// An in-flight request entry
+    /// The request is still in flight.
     Processing(IdempotencyEntry<Processing>),
-    /// A completed request entry
+    /// The request has completed and the response is cached.
     Completed(IdempotencyEntry<Completed>),
 }
 
 impl EntryState for Processing {}
 impl sealed::Sealed for Processing {}
 
-/// A token generated when a key is claimed
+/// A token generated when a key is claimed.
 ///
-/// It prevents the zombie completions from overwriting a reclaimed key's result.
+/// Prevents zombie completions from overwriting a reclaimed key's result.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FencingToken(pub(crate) u64);
@@ -171,19 +165,16 @@ impl Default for FencingToken {
     }
 }
 
-/// The request handler has processed the request and the response is cached
+/// A completed entry state with a cached response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Completed {
-    /// A cached response for a completed request
     response: CachedResponse,
 }
 
 impl EntryState for Completed {}
 impl sealed::Sealed for Completed {}
 
-/// A private module for sealed trait
 mod sealed {
-    /// A sealed trait
     pub trait Sealed {}
 }
 

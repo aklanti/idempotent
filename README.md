@@ -27,6 +27,7 @@ idempotent = { version = "0.3.0", features = ["memory"] }
 ### Quick example
 
 ```rust
+use std::time::Duration;
 use idempotent::{
     IdempotencyKey, IdempotencyEntry, IdempotencyStore,
     InsertResult, CachedResponse,
@@ -34,14 +35,14 @@ use idempotent::{
 use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
 use idempotent::memory::MemoryStore;
 
-let store = MemoryStore::new();
+let store = MemoryStore::new(64, Duration::from_secs(60));
 let key = IdempotencyKey::default();
 
 let fingerprint = DefaultFingerprintStrategy.compute("POST /credentials/issue", b"VerifiableCredential");
-let entry = IdempotencyEntry::new(fingerprint);
+let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(300));
 
-match store.try_insert(&key, entry).await? {
-    InsertResult::Claimed { fencing_token, entry } => {
+match store.try_insert(&key, entry.clone()).await? {
+    InsertResult::Claimed { fencing_token } => {
         // Execute your side effect (e.g. issue a verifiable credential)
         let response = issue_credential().await;
 

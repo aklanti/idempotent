@@ -1,4 +1,4 @@
-//! This module provides the idempotency key data structure
+//! Idempotency key type.
 
 use std::fmt;
 
@@ -29,8 +29,11 @@ impl IdempotencyKey {
     pub fn new(raw: impl Into<String>) -> Result<Self, IdempotencyError> {
         let inner = raw.into();
 
-        if inner.is_empty() || inner.len() > Self::MAX_LEN {
-            return Err(IdempotencyError::InvalidKey(inner));
+        if inner.is_empty() {
+            return Err(IdempotencyError::EmptyKey);
+        }
+        if inner.len() > Self::MAX_LEN {
+            return Err(IdempotencyError::KeyTooLong(inner.len()));
         }
 
         Ok(Self(inner))
@@ -65,13 +68,13 @@ mod tests {
     #[gtest]
     fn empty_key_is_rejected() {
         let result = IdempotencyKey::new("");
-        expect_that!(result, err(pat!(IdempotencyError::InvalidKey(anything()))));
+        expect_that!(result, err(pat!(IdempotencyError::EmptyKey)));
     }
 
     #[gtest]
     fn key_exceeding_max_len_rejected() {
         let result = IdempotencyKey::new("x".repeat(u16::MAX as usize));
-        expect_that!(result, err(pat!(IdempotencyError::InvalidKey(anything()))));
+        expect_that!(result, err(pat!(IdempotencyError::KeyTooLong(anything()))));
     }
 
     #[cfg(feature = "uuid")]
