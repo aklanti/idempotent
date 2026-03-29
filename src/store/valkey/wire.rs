@@ -60,7 +60,7 @@ impl TryFrom<&[u8]> for WireEntry {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "WireEntry::try_from", skip(bytes), err(Debug))
+        tracing::instrument(name = "WireEntry::try_from", skip(bytes), err(Display))
     )]
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         let (&version, payload) = bytes
@@ -80,7 +80,7 @@ impl TryFrom<WireEntry> for ExistingEntry {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "ExistingEntry::try_from", err(Debug))
+        tracing::instrument(name = "ExistingEntry::try_from", err(Display))
     )]
     fn try_from(wire: WireEntry) -> Result<Self, ValkeyError> {
         match wire.status {

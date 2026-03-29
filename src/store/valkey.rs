@@ -73,9 +73,13 @@ pub struct ValkeyStore {
 }
 
 impl ValkeyStore {
-    /// Opens the managed connection from `client` and creates a store.
+    /// Opens a managed connection from `client` and creates a store.
     ///
     /// Use [`Self::from_connection_manager`] to wrap an already-connected manager.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection cannot be established.
     pub async fn connect(
         service_name: impl Into<String>,
         client: Client,
@@ -153,6 +157,7 @@ impl IdempotencyStore for ValkeyStore {
             .key(self.counter_key())
             .arg(serialized)
             .arg(ttl_ms)
+            .arg(entry.fingerprint)
             .invoke_async(&mut self.conn.clone())
             .await?;
 
@@ -189,6 +194,7 @@ impl IdempotencyStore for ValkeyStore {
             .arg(serialized)
             .arg(fencing_token)
             .arg(completed_ttl.as_millis())
+            .arg(entry.fingerprint)
             .invoke_async(&mut self.conn.clone())
             .await?;
 
@@ -284,7 +290,12 @@ impl ValkeyStoreBuilder {
         self
     }
 
-    /// Resolves the `Client` to a `ConnectionManager` and builds the store.
+    /// Resolves the client to a connection manager and builds the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the prefix contains a reserved separator, or if the connection manager
+    /// cannot be created.
     pub async fn build(self) -> Result<ValkeyStore, ValkeyError> {
         let prefix = self.prefix.unwrap_or_default();
         if prefix.chars().any(IdempotencyKey::is_reserved) {

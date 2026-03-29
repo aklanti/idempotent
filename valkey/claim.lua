@@ -2,6 +2,7 @@
 -- KEY[2] = counter key
 -- ARGV[1] = serialized Processing entry
 -- ARGV[2] = ttl_ms
+-- ARGV[3] = fingerprint of the claiming request
 
 local values = redis.call('HMGET', KEYS[1], 'status', 'ft', 'data')
 if values[3] then
@@ -9,6 +10,6 @@ if values[3] then
 end
 
 local ft = redis.call('INCR', KEYS[2])
-redis.call('HSET', KEYS[1], 'status', 'in_progress', 'data', ARGV[1], 'ft', ft)
+redis.call('HSET', KEYS[1], 'status', 'in_progress', 'data', ARGV[1], 'ft', ft, 'fp', ARGV[3])
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
 return {'created', tostring(ft), ARGV[1]}  -- proceed with handler

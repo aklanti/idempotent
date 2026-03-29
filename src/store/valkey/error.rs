@@ -1,6 +1,6 @@
 use redis::RedisError;
 
-/// Errors returned by [`ValkeyStore`] operations.
+/// Errors returned by [`ValkeyStore`](super::ValkeyStore) operations.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ValkeyError {
