@@ -4,7 +4,6 @@
 //! and every retry within the TTL window receives the cached response.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-pub mod config;
 pub mod entry;
 pub mod error;
 mod fencing_token;
