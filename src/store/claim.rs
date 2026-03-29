@@ -93,9 +93,13 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
     ///
     /// On the first request for the key it is claimed, and the side effect runs with the claim's
     /// fencing token which caches the response. A later request with the same fingerprint
-    /// replays that response as, or returns while the original is still in progress.
+    /// replays that response, or returns while the original is still in progress.
     ///
     /// If the store rejects the completion, the response is still considered as executed.
+    ///
+    /// Dropping the returned future before it completes leaves the claim in place until the
+    /// processing TTL expires. For a claim that frees itself when dropped, use
+    /// [`claim_owned`](IdempotencyStore::claim_owned).
     ///
     /// # Errors
     ///
@@ -110,22 +114,13 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
         F: FnOnce(FencingToken) -> Fut,
         Fut: Future<Output = Result<CachedResponse, Box<dyn std::error::Error + Send + Sync>>>,
     {
-        let WithFingerprint(fingerprint) = self.state;
-        let entry = IdempotencyEntry::new(fingerprint, self.processing_ttl);
-        match self
-            .store
-            .try_insert(self.key, entry.clone())
-            .await
-            .map_err(ExecutionError::Store)?
-        {
-            InsertResult::Claimed { fencing_token } => {
-                let response = side_effect(fencing_token)
+        match self.try_insert().await.map_err(ExecutionError::Store)? {
+            ClaimOutcome::Claimed(guard) => {
+                let response = side_effect(guard.fencing_token())
                     .await
                     .map_err(ExecutionError::SideEffect)?;
-                let completed = entry.complete(response.clone());
-                let outcome = self
-                    .store
-                    .complete(self.key, completed, fencing_token, completed_ttl)
+                let outcome = guard
+                    .complete(response.clone(), completed_ttl)
                     .await
                     .map_err(ExecutionError::Store)?;
                 if outcome != FencedOutcome::Applied {
@@ -137,7 +132,10 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
                 }
                 Ok(ExecutionOutcome::Executed(response))
             }
-            InsertResult::Exists(existing) => Ok(match existing {
+            ClaimOutcome::Exists {
+                existing,
+                fingerprint,
+            } => Ok(match existing {
                 ExistingEntry::Completed(existing) if existing.fingerprint == fingerprint => {
                     ExecutionOutcome::Replayed(existing.into_response())
                 }
@@ -172,6 +170,7 @@ pub enum OwnedClaimOutcome<S: IdempotencyStore + Clone> {
 }
 
 /// Result of [`ClaimBuilder::execute_or_replay`].
+#[derive(Debug)]
 pub enum ExecutionOutcome {
     /// First time execution of the side effect and its response was cached.
     Executed(CachedResponse),
@@ -183,10 +182,13 @@ pub enum ExecutionOutcome {
     FingerprintMismatch,
 }
 
-/// Error when exectuting or replaying the operation.
+/// Error when executing or replaying the operation.
+#[derive(Debug, thiserror::Error)]
 pub enum ExecutionError<E> {
     /// The store operation failed.
-    Store(E),
+    #[error("store operation failed")]
+    Store(#[source] E),
     /// The side effect returned an error.
-    SideEffect(Box<dyn std::error::Error + Send + Sync>),
+    #[error("side effect failed")]
+    SideEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
