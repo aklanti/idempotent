@@ -55,7 +55,6 @@ unused_self = "deny"
 unwrap_used = "deny"
 
 [lints.rust]
-missing_docs = "warn"
 non_snake_case = "allow"
 trivial_numeric_casts = "warn"
 unsafe_code = "forbid"
