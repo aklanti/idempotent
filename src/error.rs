@@ -7,6 +7,10 @@ pub enum Error {
     #[error("idempotency key cannot be empty")]
     EmptyKey,
 
+    /// A derived-key scope segment is empty.
+    #[error("scope segment cannot be empty")]
+    EmptyScope,
+
     /// The key exceeds the 255-byte maximum.
     #[error("idempotency key exceeds 255 bytes (got {0})")]
     KeyTooLong(usize),
@@ -14,6 +18,10 @@ pub enum Error {
     /// Invalid idempotency key.
     #[error("idempotency key contains a control char or a reserved separator (':' or '/')")]
     InvalidKey,
+
+    /// A scope segment contains a control char or a reserved separator.
+    #[error("scope segment contains a control char or a reserved separator (':' or '/')")]
+    InvalidScope,
 
     /// The fencing token is invalid.
     #[error("negative fencing token")]

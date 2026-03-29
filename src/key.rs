@@ -54,6 +54,58 @@ impl IdempotencyKey {
         &self.0
     }
 
+    /// Derives a scoped child key for one sub-operation of this key.
+    ///
+    /// The derived key is `{self}/{scope}` and the derivation is deterministic.
+    /// `(key, scope)` always yields the same scoped key, so each step is
+    /// independently idempotent and replays on retry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the scope is empty, invalid or the key is too long.
+    pub fn scoped(&self, scope: impl AsRef<str>) -> Result<Self, Error> {
+        let scope = scope.as_ref();
+        self.check_scope(scope)?;
+        let mut derived = String::with_capacity(self.0.len() + 1 + scope.len());
+        derived.push_str(&self.0);
+        derived.push(Self::SCOPE_SEPARATOR);
+        derived.push_str(scope);
+        Ok(Self(derived))
+    }
+
+    /// Like [`scoped`](Self::scoped) but **consumes** the key for a linear
+    /// cursor advancing through states, where the previous key should become
+    /// inaccessible.
+    ///
+    /// On error the key is consumed. Use [`scoped`](Self::scoped)
+    /// if you need to keep the original when validation fails.
+    ///
+    /// # Errors
+    /// Same as [`scoped`](Self::scoped).
+    pub fn into_scoped(mut self, scope: impl AsRef<str>) -> Result<Self, Error> {
+        let scope = scope.as_ref();
+        self.check_scope(scope)?;
+        self.0.reserve(1 + scope.len());
+        self.0.push(Self::SCOPE_SEPARATOR);
+        self.0.push_str(scope);
+        Ok(self)
+    }
+
+    /// Validates a scope segment and the resulting length.
+    fn check_scope(&self, scope: &str) -> Result<(), Error> {
+        if scope.is_empty() {
+            return Err(Error::EmptyScope);
+        }
+        if scope.chars().any(Self::is_reserved) {
+            return Err(Error::InvalidScope);
+        }
+        let len = self.0.len() + 1 + scope.len();
+        if len > Self::MAX_LEN {
+            return Err(Error::KeyTooLong(len));
+        }
+        Ok(())
+    }
+
     /// A char that may not appear in a user-supplied key OR a service-name prefix.
     pub(crate) const fn is_reserved(c: char) -> bool {
         c.is_ascii_control() || c == Self::PREFIX_SEPARATOR || c == Self::SCOPE_SEPARATOR
