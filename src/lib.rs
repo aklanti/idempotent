@@ -10,6 +10,7 @@ pub mod error;
 mod fencing_token;
 pub mod fingerprint;
 pub mod key;
+pub mod metadata;
 pub mod store;
 
 #[doc(inline)]
@@ -17,13 +18,13 @@ pub use self::entry::CachedResponse;
 #[doc(inline)]
 pub use self::entry::IdempotencyEntry;
 #[doc(inline)]
-pub use self::entry::Metadata;
-#[doc(inline)]
 pub use self::error::Error;
 #[doc(inline)]
 pub use self::fingerprint::Fingerprint;
 #[doc(inline)]
 pub use self::key::IdempotencyKey;
+#[doc(inline)]
+pub use self::metadata::Metadata;
 #[doc(inline)]
 pub use self::store::IdempotencyStore;
 #[doc(inline)]

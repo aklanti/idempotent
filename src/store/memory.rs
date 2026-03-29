@@ -261,9 +261,9 @@ mod tests {
     use googletest::matchers::pat;
 
     use super::*;
+    use crate::Metadata;
     use crate::entry::CachedResponse;
     use crate::entry::ExistingEntry;
-    use crate::entry::Metadata;
     use crate::fingerprint::DefaultFingerprintStrategy;
     use crate::fingerprint::FingerprintStrategy;
 

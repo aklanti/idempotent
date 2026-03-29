@@ -1,12 +1,12 @@
 //! Idempotency entry types.
 //!
 //! These types are storage-agnostic and carry no timestamp or persistence concerns.
-use std::collections::HashMap;
 use std::time::Duration;
 
 use bytes::Bytes;
 
 use crate::Fingerprint;
+use crate::Metadata;
 
 /// An idempotency entry, parameterised by [`Processing`] or [`Completed`].
 #[derive(Debug, Clone)]
@@ -95,11 +95,6 @@ pub struct CachedResponse {
     /// The response body.
     pub body: Bytes,
 }
-
-/// Response metadata stored as string-keyed byte values.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Metadata(HashMap<String, Vec<u8>>);
 
 /// The request is currently being processed
 ///

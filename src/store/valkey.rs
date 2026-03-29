@@ -297,8 +297,8 @@ mod tests {
     use testcontainers_modules::valkey::Valkey;
 
     use super::*;
+    use crate::Metadata;
     use crate::entry::CachedResponse;
-    use crate::entry::Metadata;
     use crate::fingerprint::DefaultFingerprintStrategy;
     use crate::fingerprint::FingerprintStrategy;
 
