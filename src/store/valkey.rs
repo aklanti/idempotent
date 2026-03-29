@@ -63,7 +63,7 @@ static TOUCH_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
 /// See the [module-level documentation](self) for server requirements.
 pub struct ValkeyStore {
     /// The service or application name used as fencing token.
-    pub service_name: String,
+    service_name: String,
 
     /// The store connection manager.
     conn: ConnectionManager,
