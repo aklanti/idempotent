@@ -1,11 +1,20 @@
-//! Request fingerprinting.
-
 use xxhash_rust::xxh3;
 
 /// A hash of the request operation and body.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fingerprint(pub(crate) u128);
+
+#[cfg(feature = "valkey")]
+const _: () = {
+    use redis::RedisWrite;
+    use redis::ToRedisArgs;
+    impl ToRedisArgs for Fingerprint {
+        fn write_redis_args<W: ?Sized + RedisWrite>(&self, out: &mut W) {
+            self.0.write_redis_args(out);
+        }
+    }
+};
 
 /// Trait for computing request fingerprints.
 pub trait FingerprintStrategy: Send + Sync + 'static {
