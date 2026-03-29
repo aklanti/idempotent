@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use super::BoxError;
+use super::DynIdempotencyStore;
 use super::InsertResult;
 use crate::CachedResponse;
 use crate::ClaimGuard;
@@ -123,27 +125,71 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
                     .complete(response.clone(), completed_ttl)
                     .await
                     .map_err(ExecutionError::Store)?;
-                if outcome != FencedOutcome::Applied {
-                    #[cfg(feature = "tracing")]
-                    tracing::warn!(
-                        ?outcome,
-                        "idempotency completion rejected after the side effect ran"
-                    );
-                }
+                warn_if_rejected(outcome);
                 Ok(ExecutionOutcome::Executed(response))
             }
             ClaimOutcome::Exists {
                 existing,
                 fingerprint,
-            } => Ok(match existing {
-                ExistingEntry::Completed(existing) if existing.fingerprint == fingerprint => {
-                    ExecutionOutcome::Replayed(existing.into_response())
-                }
-                ExistingEntry::Processing(existing) if existing.fingerprint == fingerprint => {
-                    ExecutionOutcome::InFlight
-                }
-                _ => ExecutionOutcome::FingerprintMismatch,
-            }),
+            } => Ok(replay_outcome(existing, fingerprint)),
+        }
+    }
+}
+
+impl dyn DynIdempotencyStore {
+    /// Claims the key and runs the side effect, or replays the cached response on a matching retry.
+    ///
+    /// The erased counterpart of [`ClaimBuilder::execute_or_replay`], for callers holding the
+    /// store as `Arc<dyn DynIdempotencyStore>`. It rides the object-safe methods directly, so it
+    /// resolves inside boxed futures where the [`IdempotencyStore`] impl on the `Arc` cannot be
+    /// named. The request is fingerprinted from `operation` and `body` with the default strategy.
+    ///
+    /// If the store rejects the completion, the response is still considered as executed.
+    ///
+    /// Dropping the returned future before it completes leaves the claim in place until the
+    /// processing TTL expires.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the side effect fails, or if a store operation fails.
+    /// When the side effect fails, the claim is left to expire so a later retry re-runs it.
+    pub async fn execute_or_replay<F, Fut>(
+        &self,
+        key: &IdempotencyKey,
+        processing_ttl: Duration,
+        completed_ttl: Duration,
+        operation: &str,
+        body: &[u8],
+        side_effect: F,
+    ) -> Result<ExecutionOutcome, ExecutionError<BoxError>>
+    where
+        F: FnOnce(FencingToken) -> Fut,
+        Fut: Future<Output = Result<CachedResponse, Box<dyn std::error::Error + Send + Sync>>>,
+    {
+        let fingerprint = DefaultFingerprintStrategy.compute(operation, body);
+        let entry = IdempotencyEntry::new(fingerprint, processing_ttl);
+        match self
+            .try_insert(key, entry.clone())
+            .await
+            .map_err(ExecutionError::Store)?
+        {
+            InsertResult::Claimed { fencing_token } => {
+                let response = side_effect(fencing_token)
+                    .await
+                    .map_err(ExecutionError::SideEffect)?;
+                let outcome = self
+                    .complete(
+                        key,
+                        entry.complete(response.clone()),
+                        fencing_token,
+                        completed_ttl,
+                    )
+                    .await
+                    .map_err(ExecutionError::Store)?;
+                warn_if_rejected(outcome);
+                Ok(ExecutionOutcome::Executed(response))
+            }
+            InsertResult::Exists(existing) => Ok(replay_outcome(existing, fingerprint)),
         }
     }
 }
@@ -191,4 +237,28 @@ pub enum ExecutionError<E> {
     /// The side effect returned an error.
     #[error("side effect failed")]
     SideEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+/// Maps an existing entry against the request's fingerprint.
+fn replay_outcome(existing: ExistingEntry, fingerprint: Fingerprint) -> ExecutionOutcome {
+    match existing {
+        ExistingEntry::Completed(entry) if entry.fingerprint == fingerprint => {
+            ExecutionOutcome::Replayed(entry.into_response())
+        }
+        ExistingEntry::Processing(entry) if entry.fingerprint == fingerprint => {
+            ExecutionOutcome::InFlight
+        }
+        _ => ExecutionOutcome::FingerprintMismatch,
+    }
+}
+
+/// Logs a completion the store rejected after the side effect ran.
+fn warn_if_rejected(outcome: FencedOutcome) {
+    if outcome != FencedOutcome::Applied {
+        #[cfg(feature = "tracing")]
+        tracing::warn!(
+            ?outcome,
+            "idempotency completion rejected after the side effect ran"
+        );
+    }
 }

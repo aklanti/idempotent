@@ -329,6 +329,7 @@ mod tests {
     use crate::store::DynIdempotencyStore;
     use crate::store::IdempotencyStore;
     use crate::store::claim::ClaimOutcome;
+    use crate::store::claim::ExecutionOutcome;
     use crate::store::memory::MemoryStore;
 
     #[tokio::test]
@@ -361,5 +362,54 @@ mod tests {
             .await
             .expect("complete");
         assert_eq!(applied, FencedOutcome::Applied);
+    }
+
+    #[tokio::test]
+    async fn erased_store_executes_then_replays() {
+        let store = MemoryStore::builder()
+            .buffer(16)
+            .sweep_interval(Duration::from_secs(60))
+            .try_build()
+            .expect("build memory store");
+        let store: Arc<dyn DynIdempotencyStore> = Arc::new(store);
+
+        let key = IdempotencyKey::new("erased").expect("valid key");
+        let response = CachedResponse {
+            status_code: 201,
+            metadata: Metadata::new(),
+            body: b"ok".to_vec().into(),
+        };
+
+        let first = store
+            .execute_or_replay(
+                &key,
+                Duration::from_secs(30),
+                Duration::from_secs(60),
+                "POST /charges",
+                b"{}",
+                |_token| {
+                    let response = response.clone();
+                    async move { Ok(response) }
+                },
+            )
+            .await
+            .expect("execute");
+        assert!(matches!(first, ExecutionOutcome::Executed(_)));
+
+        let second = store
+            .execute_or_replay(
+                &key,
+                Duration::from_secs(30),
+                Duration::from_secs(60),
+                "POST /charges",
+                b"{}",
+                |_token| async move { Err("the side effect must not re-run on a replay".into()) },
+            )
+            .await
+            .expect("replay");
+        let ExecutionOutcome::Replayed(cached) = second else {
+            panic!("expected the cached response to replay");
+        };
+        assert_eq!(cached.status_code, 201);
     }
 }
