@@ -15,7 +15,6 @@ pub struct ClaimGuard<'a, S: IdempotencyStore> {
     store: &'a S,
     key: &'a IdempotencyKey,
     fencing_token: FencingToken,
-    completed: bool,
 }
 
 impl<S: IdempotencyStore> ClaimGuard<'_, S> {

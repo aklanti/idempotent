@@ -15,7 +15,7 @@ features = ["memory", "serde", "tracing", "uuid", "valkey"]
 
 [features]
 default = ["uuid"]
-memory = ["tokio/time"]
+memory = ["tokio/time", "tokio/macros"]
 serde = ["dep:serde"]
 tracing = ["dep:tracing"]
 uuid = ["dep:uuid"]
