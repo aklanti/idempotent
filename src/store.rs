@@ -1,20 +1,25 @@
 //! Idempotency store trait and result types.
 
-#[cfg(feature = "memory")]
-pub mod memory;
-#[cfg(feature = "valkey")]
-pub mod valkey;
-
 use std::pin::Pin;
 use std::time::Duration;
 
 use crate::FencedOutcome;
+use crate::OwnedClaimGuard;
 use crate::entry::Completed;
 use crate::entry::ExistingEntry;
 use crate::entry::IdempotencyEntry;
 use crate::entry::Processing;
 use crate::fencing_token::FencingToken;
 use crate::key::IdempotencyKey;
+mod claim;
+#[cfg(feature = "memory")]
+pub mod memory;
+#[cfg(feature = "valkey")]
+pub mod valkey;
+
+use self::claim::ClaimBuilder;
+use self::claim::NoFingerprint;
+use self::claim::OwnedClaimOutcome;
 
 /// Trait for idempotency entry storage backends.
 pub trait IdempotencyStore: Send + Sync + 'static {
@@ -31,6 +36,42 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         entry: IdempotencyEntry<Processing>,
     ) -> impl Future<Output = Result<InsertResult, Self::Error>> + Send;
 
+    /// Creates a builder for a borrowed claim.
+    fn claim<'store>(
+        &'store self,
+        key: &'store IdempotencyKey,
+        processing_ttl: Duration,
+    ) -> ClaimBuilder<'store, Self, NoFingerprint>
+    where
+        Self: Sized,
+    {
+        ClaimBuilder::new(self, key, processing_ttl)
+    }
+
+    /// Creates a builder for an owned claim.
+    fn claim_owned(
+        &self,
+        key: IdempotencyKey,
+        entry: IdempotencyEntry<Processing>,
+    ) -> impl Future<Output = Result<OwnedClaimOutcome<Self>, Self::Error>> + Send
+    where
+        Self: Clone + Send + Sync + 'static,
+    {
+        async move {
+            let fingerprint = entry.fingerprint;
+            let value = match self.try_insert(&key, entry).await? {
+                InsertResult::Claimed { fencing_token } => {
+                    let guard = OwnedClaimGuard::new(self.clone(), key, fencing_token);
+                    OwnedClaimOutcome::Claimed(guard)
+                }
+                InsertResult::Exists(existing) => OwnedClaimOutcome::Exists {
+                    existing,
+                    fingerprint,
+                },
+            };
+            Ok(value)
+        }
+    }
     /// Marks a claimed key as completed with a cached response.
     ///
     /// The fencing token must match the one returned by [`Self::try_insert`].
@@ -107,8 +148,8 @@ pub trait DynIdempotencyStore: Send + Sync + 'static {
         fencing_token: FencingToken,
     ) -> Pin<Box<dyn Future<Output = Result<FencedOutcome, BoxError>> + Send + 'a>>;
 
-    /// Extends the processing lease on `key` by `ttl` while `fencing_token` still matches the claim.
-    /// Erased form of [`IdempotencyStore::touch`].
+    /// Extends the processing lease on `key` by `ttl` while `fencing_token` still matches the
+    /// claim. Erased form of [`IdempotencyStore::touch`].
     fn touch<'a>(
         &'a self,
         key: &'a IdempotencyKey,

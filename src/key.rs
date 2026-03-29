@@ -11,10 +11,8 @@ pub struct IdempotencyKey(String);
 impl IdempotencyKey {
     /// The maximum allowed length of an idempotency key
     const MAX_LEN: usize = u8::MAX as usize;
-
     /// Prefix / tenancy boundary. Reserved: forbidden in keys and prefixes.
     const PREFIX_SEPARATOR: char = ':';
-
     /// Scope boundary (Change 24). Reserved likewise.
     pub const SCOPE_SEPARATOR: char = '/';
 

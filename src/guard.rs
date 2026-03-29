@@ -1,4 +1,4 @@
-//! This module define a borrowed and owned cancellation guards for safety.
+//! This module define a borrowed and owned guards for cancellation safety.
 use std::time::Duration;
 
 use tokio::runtime::Handle;
@@ -15,6 +15,21 @@ pub struct ClaimGuard<'a, S: IdempotencyStore> {
     store: &'a S,
     key: &'a IdempotencyKey,
     fencing_token: FencingToken,
+}
+
+impl<'a, S: IdempotencyStore> ClaimGuard<'a, S> {
+    /// Creates a borrowed claim guard.
+    pub(crate) const fn new(
+        store: &'a S,
+        key: &'a IdempotencyKey,
+        fencing_token: FencingToken,
+    ) -> Self {
+        Self {
+            store,
+            key,
+            fencing_token,
+        }
+    }
 }
 
 impl<S: IdempotencyStore> ClaimGuard<'_, S> {
@@ -50,6 +65,21 @@ pub struct OwnedClaimGuard<S: IdempotencyStore + Clone> {
 }
 
 impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
+    /// Creates an owned claim guard.
+    ///
+    /// # Panics
+    ///
+    /// Must be called from within a Tokio runtime.
+    pub(crate) fn new(store: S, key: IdempotencyKey, fencing_token: FencingToken) -> Self {
+        Self {
+            store,
+            key,
+            fencing_token,
+            handle: Handle::current(),
+            completed: false,
+        }
+    }
+
     /// Returns the fencing token issued for this claim.
     pub const fn fencing_token(&self) -> FencingToken {
         self.fencing_token
