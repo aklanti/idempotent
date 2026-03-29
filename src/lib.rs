@@ -34,6 +34,8 @@ pub use self::metadata::Metadata;
 #[doc(inline)]
 pub use self::store::IdempotencyStore;
 #[doc(inline)]
+pub use self::store::IdempotencyStoreHandle;
+#[doc(inline)]
 pub use self::store::InsertResult;
 #[doc(inline)]
 pub use self::store::claim::ClaimBuilder;
