@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use super::AnyIdempotencyStore;
 use super::InsertResult;
 use crate::CachedResponse;
 use crate::ClaimGuard;
@@ -22,14 +21,14 @@ pub struct NoFingerprint;
 pub struct WithFingerprint(Fingerprint);
 
 /// A builder for a claim.
-pub struct ClaimBuilder<'store, S: IdempotencyStore + ?Sized, State = NoFingerprint> {
+pub struct ClaimBuilder<'store, S: IdempotencyStore, State = NoFingerprint> {
     store: &'store S,
     key: &'store IdempotencyKey,
     processing_ttl: Duration,
     state: State,
 }
 
-impl<'store, S: IdempotencyStore + ?Sized> ClaimBuilder<'store, S, NoFingerprint> {
+impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, NoFingerprint> {
     pub(crate) const fn new(
         store: &'store S,
         key: &'store IdempotencyKey,
@@ -69,7 +68,7 @@ impl<'store, S: IdempotencyStore + ?Sized> ClaimBuilder<'store, S, NoFingerprint
     }
 }
 
-impl<'store, S: IdempotencyStore + ?Sized> ClaimBuilder<'store, S, WithFingerprint> {
+impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
     /// Claims the key, returning a [`ClaimGuard`] on success or the entry that already exists.
     ///
     /// # Errors
@@ -135,23 +134,8 @@ impl<'store, S: IdempotencyStore + ?Sized> ClaimBuilder<'store, S, WithFingerpri
     }
 }
 
-impl dyn AnyIdempotencyStore {
-    /// Creates a builder for a borrowed claim, like [`IdempotencyStore::claim`].
-    ///
-    /// An inherent method, so it resolves on the trait object itself — including
-    /// inside boxed futures where the [`IdempotencyStore`] impl on the `Arc` cannot be named.
-    /// Reach it through a deref: `(&*store).claim(…)`.
-    pub const fn claim<'store>(
-        &'store self,
-        key: &'store IdempotencyKey,
-        processing_ttl: Duration,
-    ) -> ClaimBuilder<'store, Self, NoFingerprint> {
-        ClaimBuilder::new(self, key, processing_ttl)
-    }
-}
-
 /// The outcome of a borrowed claim.
-pub enum ClaimOutcome<'store, S: IdempotencyStore + ?Sized> {
+pub enum ClaimOutcome<'store, S: IdempotencyStore> {
     /// The key was claimed.
     Claimed(ClaimGuard<'store, S>),
     /// The key is already taken.

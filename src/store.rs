@@ -169,7 +169,10 @@ impl std::error::Error for BoxError {
     }
 }
 
-/// [`IdempotencyStore`] usable behind a pointer such as `Arc<dyn AnyIdempotencyStore>`.
+/// The store operations behind [`IdempotencyStoreHandle`].
+///
+/// Every [`IdempotencyStore`] implements it automatically; use the handle rather than this
+/// trait directly.
 pub trait AnyIdempotencyStore: Send + Sync + 'static {
     /// Claims `key`.
     fn try_insert<'a>(
@@ -274,50 +277,28 @@ impl<S: IdempotencyStore> AnyIdempotencyStore for S {
     }
 }
 
-impl IdempotencyStore for Arc<dyn AnyIdempotencyStore> {
-    type Error = BoxError;
+/// A shared handle to any [`IdempotencyStore`].
+///
+/// Cloning is cheap, and the handle implements [`IdempotencyStore`] itself with [`BoxError`]
+/// as its error, so one field serves every backend without a type parameter.
+#[derive(Clone)]
+pub struct IdempotencyStoreHandle(Arc<dyn AnyIdempotencyStore>);
 
-    async fn try_insert(
-        &self,
-        key: &IdempotencyKey,
-        entry: IdempotencyEntry<Processing>,
-    ) -> Result<InsertResult, Self::Error> {
-        AnyIdempotencyStore::try_insert(&**self, key, entry).await
-    }
-
-    async fn complete(
-        &self,
-        key: &IdempotencyKey,
-        entry: IdempotencyEntry<Completed>,
-        fencing_token: FencingToken,
-        completed_ttl: Duration,
-    ) -> Result<FencedOutcome, Self::Error> {
-        AnyIdempotencyStore::complete(&**self, key, entry, fencing_token, completed_ttl).await
-    }
-
-    async fn remove(
-        &self,
-        key: &IdempotencyKey,
-        fencing_token: FencingToken,
-    ) -> Result<FencedOutcome, Self::Error> {
-        AnyIdempotencyStore::remove(&**self, key, fencing_token).await
-    }
-
-    async fn touch(
-        &self,
-        key: &IdempotencyKey,
-        fencing_token: FencingToken,
-        ttl: Duration,
-    ) -> Result<FencedOutcome, Self::Error> {
-        AnyIdempotencyStore::touch(&**self, key, fencing_token, ttl).await
-    }
-
-    async fn purge(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
-        AnyIdempotencyStore::purge(&**self, key).await
+impl IdempotencyStoreHandle {
+    /// Wraps `store` in a shared handle.
+    pub fn new<S: IdempotencyStore>(store: S) -> Self {
+        Self(Arc::new(store))
     }
 }
 
-impl IdempotencyStore for dyn AnyIdempotencyStore {
+impl std::fmt::Debug for IdempotencyStoreHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdempotencyStoreHandle")
+            .finish_non_exhaustive()
+    }
+}
+
+impl IdempotencyStore for IdempotencyStoreHandle {
     type Error = BoxError;
 
     async fn try_insert(
@@ -325,7 +306,7 @@ impl IdempotencyStore for dyn AnyIdempotencyStore {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Processing>,
     ) -> Result<InsertResult, Self::Error> {
-        AnyIdempotencyStore::try_insert(self, key, entry).await
+        self.0.try_insert(key, entry).await
     }
 
     async fn complete(
@@ -335,7 +316,9 @@ impl IdempotencyStore for dyn AnyIdempotencyStore {
         fencing_token: FencingToken,
         completed_ttl: Duration,
     ) -> Result<FencedOutcome, Self::Error> {
-        AnyIdempotencyStore::complete(self, key, entry, fencing_token, completed_ttl).await
+        self.0
+            .complete(key, entry, fencing_token, completed_ttl)
+            .await
     }
 
     async fn remove(
@@ -343,7 +326,7 @@ impl IdempotencyStore for dyn AnyIdempotencyStore {
         key: &IdempotencyKey,
         fencing_token: FencingToken,
     ) -> Result<FencedOutcome, Self::Error> {
-        AnyIdempotencyStore::remove(self, key, fencing_token).await
+        self.0.remove(key, fencing_token).await
     }
 
     async fn touch(
@@ -352,37 +335,36 @@ impl IdempotencyStore for dyn AnyIdempotencyStore {
         fencing_token: FencingToken,
         ttl: Duration,
     ) -> Result<FencedOutcome, Self::Error> {
-        AnyIdempotencyStore::touch(self, key, fencing_token, ttl).await
+        self.0.touch(key, fencing_token, ttl).await
     }
 
     async fn purge(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
-        AnyIdempotencyStore::purge(self, key).await
+        self.0.purge(key).await
     }
 }
 
 #[cfg(all(test, feature = "memory"))]
 mod tests {
-    use std::sync::Arc;
     use std::time::Duration;
 
     use crate::CachedResponse;
     use crate::FencedOutcome;
     use crate::IdempotencyKey;
     use crate::Metadata;
-    use crate::store::AnyIdempotencyStore;
     use crate::store::IdempotencyStore;
+    use crate::store::IdempotencyStoreHandle;
     use crate::store::claim::ClaimOutcome;
     use crate::store::claim::ExecutionOutcome;
     use crate::store::memory::MemoryStore;
 
     #[tokio::test]
-    async fn shared_store_claims_and_completes() {
+    async fn store_handle_claims_and_completes() {
         let store = MemoryStore::builder()
             .buffer(16)
             .sweep_interval(Duration::from_secs(60))
             .try_build()
             .expect("build memory store");
-        let store: Arc<dyn AnyIdempotencyStore> = Arc::new(store);
+        let store = IdempotencyStoreHandle::new(store);
 
         let key = IdempotencyKey::new("shared").expect("valid key");
         let outcome = store
@@ -408,14 +390,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn any_store_executes_then_replays() {
+    async fn store_handle_executes_then_replays() {
         let store = MemoryStore::builder()
             .buffer(16)
             .sweep_interval(Duration::from_secs(60))
             .try_build()
             .expect("build memory store");
-        let store: Arc<dyn AnyIdempotencyStore> = Arc::new(store);
-        let store: &dyn AnyIdempotencyStore = &*store;
+        let store = IdempotencyStoreHandle::new(store);
 
         let key = IdempotencyKey::new("achebe").expect("valid key");
         let response = CachedResponse {
