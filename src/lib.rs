@@ -36,6 +36,16 @@ pub use self::store::IdempotencyStore;
 #[doc(inline)]
 pub use self::store::InsertResult;
 #[doc(inline)]
+pub use self::store::claim::ClaimBuilder;
+#[doc(inline)]
+pub use self::store::claim::ClaimOutcome;
+#[doc(inline)]
+pub use self::store::claim::ExecutionError;
+#[doc(inline)]
+pub use self::store::claim::ExecutionOutcome;
+#[doc(inline)]
+pub use self::store::claim::OwnedClaimOutcome;
+#[doc(inline)]
 #[cfg(feature = "memory")]
 pub use self::store::memory;
 #[doc(inline)]

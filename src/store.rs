@@ -11,7 +11,7 @@ use crate::entry::IdempotencyEntry;
 use crate::entry::Processing;
 use crate::fencing_token::FencingToken;
 use crate::key::IdempotencyKey;
-mod claim;
+pub mod claim;
 #[cfg(feature = "memory")]
 pub mod memory;
 #[cfg(feature = "valkey")]
