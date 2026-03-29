@@ -67,9 +67,9 @@ impl<S: IdempotencyStore> ClaimGuard<'_, S> {
         response: CachedResponse,
         completed_ttl: Duration,
     ) -> Result<FencedOutcome, S::Error> {
-        let entry = self.entry.complete(response);
+        let entry = self.entry.complete(response, completed_ttl);
         self.store
-            .complete(self.key, entry, self.fencing_token, completed_ttl)
+            .complete(self.key, entry, self.fencing_token)
             .await
     }
 }
@@ -140,9 +140,9 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
         completed_ttl: Duration,
     ) -> Result<FencedOutcome, S::Error> {
         self.completed = true;
-        let entry = self.entry.clone().complete(response);
+        let entry = self.entry.clone().complete(response, completed_ttl);
         self.store
-            .complete(&self.key, entry, self.fencing_token, completed_ttl)
+            .complete(&self.key, entry, self.fencing_token)
             .await
     }
 }

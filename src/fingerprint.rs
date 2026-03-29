@@ -5,6 +5,13 @@ use xxhash_rust::xxh3;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fingerprint(pub(crate) u128);
 
+impl Fingerprint {
+    /// Creates a fingerprint from a precomputed 128-bit hash.
+    pub const fn new(value: u128) -> Self {
+        Self(value)
+    }
+}
+
 #[cfg(feature = "valkey")]
 const _: () = {
     use redis::RedisWrite;

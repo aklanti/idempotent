@@ -65,50 +65,36 @@ static TOUCH_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
 ///
 /// See the [module-level documentation](self) for server requirements.
 pub struct ValkeyStore {
-    /// The service or application name used as fencing token.
-    service_name: String,
+    /// Key prefix that isolates this store's keys and its fencing-token counter
+    /// from other services on the same server.
+    prefix: String,
 
     /// The store connection manager.
     conn: ConnectionManager,
 }
 
 impl ValkeyStore {
-    /// Opens a managed connection from `client` and creates a store.
-    ///
-    /// Use [`Self::from_connection_manager`] to wrap an already-connected manager.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the connection cannot be established.
-    pub async fn connect(
-        service_name: impl Into<String>,
-        client: Client,
-    ) -> Result<Self, ValkeyError> {
-        let conn = client.get_connection_manager().await?;
-        let store = Self {
-            service_name: service_name.into(),
-            conn,
-        };
-
-        Ok(store)
-    }
-
     /// Returns a prefixed key.
     fn prefixed_key(&self, key: &IdempotencyKey) -> String {
-        format!("{}:{key}", self.service_name)
+        format!("{}:{key}", self.prefix)
     }
 
     /// Returns the fencing token key name.
     fn counter_key(&self) -> String {
-        format!("{}::idempotent_ft_seq", self.service_name)
+        format!("{}::idempotent_ft_seq", self.prefix)
     }
 
+    /// Sends a `PING` to the server, for readiness probes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server cannot be reached.
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(
             name = "ValkeyStore::ping",
             skip(self),
-            fields(prefix = ?self.service_name),
+            fields(prefix = ?self.prefix),
             err(Display),
         )
     )]
@@ -119,21 +105,18 @@ impl ValkeyStore {
         Ok(())
     }
 
-    /// Creates a store from an already-connected manager.
-    pub fn from_connection_manager(
-        service_name: impl Into<String>,
-        conn: ConnectionManager,
-    ) -> Self {
-        Self {
-            service_name: service_name.into(),
-            conn,
+    /// Starts building a store backed with the given client and no key prefix.
+    pub const fn with_client(client: Client) -> ValkeyStoreBuilder {
+        ValkeyStoreBuilder {
+            source: Source::Client(client),
+            prefix: None,
         }
     }
 
-    /// Starts building a store backed by `client`, with no key prefix by default.
-    pub const fn with_client(client: Client) -> ValkeyStoreBuilder {
+    /// Starts building a store over an already-connected manager, with no key prefix by default.
+    pub const fn with_connection_manager(conn: ConnectionManager) -> ValkeyStoreBuilder {
         ValkeyStoreBuilder {
-            client,
+            source: Source::Manager(conn),
             prefix: None,
         }
     }
@@ -142,7 +125,7 @@ impl ValkeyStore {
 impl fmt::Debug for ValkeyStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ValkeyStore")
-            .field("service_name", &self.service_name)
+            .field("prefix", &self.prefix)
             .finish_non_exhaustive()
     }
 }
@@ -155,7 +138,7 @@ impl IdempotencyStore for ValkeyStore {
         tracing::instrument(
             name = "ValkeyStore::try_insert",
             skip(self, entry),
-            fields(key = %key, prefix = ?self.service_name),
+            fields(key = %key, prefix = ?self.prefix),
             err(Display))
     )]
     async fn try_insert(
@@ -192,7 +175,7 @@ impl IdempotencyStore for ValkeyStore {
         tracing::instrument(
             name = "ValkeyStore::complete",
             skip(self, entry, fencing_token),
-            fields(key = %key, prefix = ?self.service_name),
+            fields(key = %key, prefix = ?self.prefix),
             err(Display),
         )
     )]
@@ -201,7 +184,6 @@ impl IdempotencyStore for ValkeyStore {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-        completed_ttl: Duration,
     ) -> Result<FencedOutcome, Self::Error> {
         let prefixed = self.prefixed_key(key);
         let serialized = WireEntry::from(&entry).to_bytes()?;
@@ -209,20 +191,19 @@ impl IdempotencyStore for ValkeyStore {
             .key(&prefixed)
             .arg(serialized)
             .arg(fencing_token)
-            .arg(completed_ttl.as_millis())
+            .arg(entry.ttl.as_millis())
             .arg(entry.fingerprint)
             .invoke_async(&mut self.conn.clone())
             .await?;
 
-        FencedOutcome::try_from(value)
-            .map_err(|_| ValkeyError::Decode("invalid return type".into()))
+        decode_sentinel(value)
     }
 
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(
             name = "ValkeyStore::remove",
-            fields(key = %key, prefix = ?self.service_name),
+            fields(key = %key, prefix = ?self.prefix),
             skip(self, fencing_token),
             err(Display),
         )
@@ -239,15 +220,14 @@ impl IdempotencyStore for ValkeyStore {
             .invoke_async(&mut self.conn.clone())
             .await?;
 
-        FencedOutcome::try_from(value)
-            .map_err(|_| ValkeyError::Decode("invalid return type".into()))
+        decode_sentinel(value)
     }
 
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(
             name = "ValkeyStore::touch",
-            fields(key = %key, prefix = ?self.service_name),
+            fields(key = %key, prefix = ?self.prefix),
             skip(self, fencing_token),
             err(Display),
         )
@@ -268,15 +248,14 @@ impl IdempotencyStore for ValkeyStore {
             .invoke_async(&mut self.conn.clone())
             .await?;
 
-        FencedOutcome::try_from(value)
-            .map_err(|_| ValkeyError::Decode("invalid return type".into()))
+        decode_sentinel(value)
     }
 
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(
-            name = "ValkeyStore::touch",
-            fields(key = %key, prefix = ?self.service_name),
+            name = "ValkeyStore::purge",
+            fields(key = %key, prefix = ?self.prefix),
             skip(self),
             err(Display),
         )
@@ -291,34 +270,53 @@ impl IdempotencyStore for ValkeyStore {
     }
 }
 
+/// Decodes a Lua script sentinel into a [`FencedOutcome`].
+fn decode_sentinel(value: i64) -> Result<FencedOutcome, ValkeyError> {
+    FencedOutcome::from_sentinel(value)
+        .ok_or_else(|| ValkeyError::Decode(format!("unexpected fenced outcome {value}").into()))
+}
+
 /// Builder for [`ValkeyStore`].
 pub struct ValkeyStoreBuilder {
-    client: Client,
+    source: Source,
     prefix: Option<String>,
+}
+
+/// The connection source the builder resolves at build time.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the builder is transient; boxing the client would forbid const construction"
+)]
+enum Source {
+    Client(Client),
+    Manager(ConnectionManager),
 }
 
 impl ValkeyStoreBuilder {
     /// Sets the key prefix (service name).
     ///
-    /// The prefix must not contain the reserved separator or scope `/`.
+    /// The prefix must not contain a reserved separator (`:` or `/`).
     pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
         self.prefix = Some(prefix.into());
         self
     }
 
-    /// Resolves the client to a connection manager and builds the store.
+    /// Builds the store, resolving a client to a connection manager when needed.
     ///
     /// # Errors
     ///
-    /// Returns an error if the prefix contains a reserved separator, or if the connection manager
-    /// cannot be created.
-    pub async fn build(self) -> Result<ValkeyStore, ValkeyError> {
+    /// Returns an error if the prefix contains a reserved separator or a control character, or
+    /// if the connection manager cannot be created.
+    pub async fn try_build(self) -> Result<ValkeyStore, ValkeyError> {
         let prefix = self.prefix.unwrap_or_default();
         if prefix.chars().any(IdempotencyKey::is_reserved) {
             return Err(ValkeyError::InvalidPrefix(prefix));
         }
-        let conn = self.client.get_connection_manager().await?;
-        Ok(ValkeyStore::from_connection_manager(prefix, conn))
+        let conn = match self.source {
+            Source::Client(client) => client.get_connection_manager().await?,
+            Source::Manager(conn) => conn,
+        };
+        Ok(ValkeyStore { prefix, conn })
     }
 }
 
@@ -329,6 +327,7 @@ mod tests {
     use googletest::gtest;
     use googletest::matchers::anything;
     use googletest::matchers::eq;
+    use googletest::matchers::err;
     use googletest::matchers::ok;
     use googletest::matchers::pat;
     use testcontainers::runners::AsyncRunner;
@@ -350,10 +349,23 @@ mod tests {
             .expect("to get container port");
         let client =
             redis::Client::open(format!("redis://127.0.0.1:{port}")).expect("to connect to Valkey");
-        let store = ValkeyStore::connect("test", client)
+        let store = ValkeyStore::with_client(client)
+            .prefix("test")
+            .try_build()
             .await
             .expect("to create a store");
         (store, container)
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn try_build_rejects_reserved_prefix() {
+        let client = redis::Client::open("redis://127.0.0.1:1").expect("to parse the URL");
+        let result = ValkeyStore::with_client(client)
+            .prefix("bad:prefix")
+            .try_build()
+            .await;
+        expect_that!(result, err(pat!(ValkeyError::InvalidPrefix(anything()))));
     }
 
     #[gtest]
@@ -391,8 +403,8 @@ mod tests {
         };
 
         expect_that!(fencing_token.value(), eq(1));
-        let completed = entry.complete(response);
-        let result = store.complete(&key, completed, fencing_token, TTL).await;
+        let completed = entry.complete(response, TTL);
+        let result = store.complete(&key, completed, fencing_token).await;
 
         expect_that!(result, ok(eq(&FencedOutcome::Applied)));
         let entry = IdempotencyEntry::new(fingerprint, TTL);

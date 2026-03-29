@@ -20,12 +20,4 @@ pub enum Error {
     /// A scope segment contains a control char or a reserved separator.
     #[error("scope segment contains a control char or a reserved separator (':' or '/')")]
     InvalidScope,
-
-    /// The fencing token is invalid.
-    #[error("negative fencing token")]
-    NegativeFencingToken,
-
-    /// The fencing outcome is unexpected.
-    #[error("unexpected fenced outcome: {0}")]
-    UnexpectedFencedOutcome(i64),
 }

@@ -139,13 +139,8 @@ impl IdempotencyStore for MemoryStore {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-        completed_ttl: Duration,
     ) -> Result<FencedOutcome, Self::Error> {
         let (reply, rx) = oneshot::channel();
-
-        let mut entry = entry;
-        entry.ttl = completed_ttl;
-
         let cmd = Command::Complete {
             key: key.clone(),
             entry,
@@ -351,7 +346,7 @@ mod tests {
             return;
         };
 
-        let completed = entry.complete(response);
+        let completed = entry.complete(response, TTL);
         store.complete(key.clone(), completed, fencing_token);
 
         let second = store.try_insert(
@@ -412,7 +407,7 @@ mod tests {
             })
         );
 
-        let completed = entry.complete(response);
+        let completed = entry.complete(response, TTL);
         let wrong_token = FencingToken(u64::MAX);
         store.complete(key.clone(), completed, wrong_token);
 
@@ -567,9 +562,9 @@ mod tests {
             return;
         };
 
-        let completed = entry.complete(response.clone());
+        let completed = entry.complete(response.clone(), TTL);
         store
-            .complete(&key, completed, fencing_token, TTL)
+            .complete(&key, completed, fencing_token)
             .await
             .expect("an insertion result");
 
@@ -608,10 +603,10 @@ mod tests {
             }))
         );
 
-        let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response);
+        let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response, TTL);
         let wrong_token = FencingToken(4);
         store
-            .complete(&key, completed, wrong_token, TTL)
+            .complete(&key, completed, wrong_token)
             .await
             .expect("entry to complete");
 
@@ -730,9 +725,9 @@ mod tests {
             panic!("expected claimed result");
         };
 
-        let completed = entry.complete(response);
+        let completed = entry.complete(response, TTL);
         store
-            .complete(&key, completed, fencing_token, TTL)
+            .complete(&key, completed, fencing_token)
             .await
             .expect("to complete side effect");
         let mut handles = Vec::with_capacity(10);

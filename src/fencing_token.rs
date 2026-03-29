@@ -1,4 +1,4 @@
-use crate::Error;
+//! Fencing tokens and fenced-operation outcomes.
 
 /// A token generated when a key is claimed.
 ///
@@ -8,19 +8,14 @@ use crate::Error;
 pub struct FencingToken(pub(crate) u64);
 
 impl FencingToken {
+    /// Creates a fencing token.
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     /// Returns the fencing token value.
     pub const fn value(self) -> u64 {
         self.0
-    }
-}
-
-impl TryFrom<i64> for FencingToken {
-    type Error = Error;
-
-    fn try_from(value: i64) -> Result<Self, Self::Error> {
-        u64::try_from(value)
-            .map_err(|_| Error::NegativeFencingToken)
-            .map(Self)
     }
 }
 
@@ -48,20 +43,16 @@ pub enum FencedOutcome {
     FingerprintMismatch,
 }
 
-impl TryFrom<i64> for FencedOutcome {
-    type Error = Error;
-
-    fn try_from(value: i64) -> Result<Self, Self::Error> {
-        let me = match value {
-            0 => Self::Applied,
-            1 => Self::FencingMismatch,
-            2 => Self::KeyExpired,
-            3 => Self::FingerprintMismatch,
-            other => {
-                return Err(Error::UnexpectedFencedOutcome(other));
-            }
-        };
-
-        Ok(me)
+#[cfg(feature = "valkey")]
+impl FencedOutcome {
+    /// Decodes the sentinel returned by the Valkey Lua scripts.
+    pub(crate) const fn from_sentinel(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::Applied),
+            1 => Some(Self::FencingMismatch),
+            2 => Some(Self::KeyExpired),
+            3 => Some(Self::FingerprintMismatch),
+            _ => None,
+        }
     }
 }

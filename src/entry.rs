@@ -23,14 +23,7 @@ pub struct IdempotencyEntry<State: EntryState> {
 impl IdempotencyEntry<Processing> {
     /// Creates a new idempotency entry in processing state.
     #[must_use]
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(
-            name = "IdempotencyEntry::new",
-            level=tracing::Level::DEBUG,
-        )
-    )]
-    pub fn new(fingerprint: Fingerprint, ttl: Duration) -> Self {
+    pub const fn new(fingerprint: Fingerprint, ttl: Duration) -> Self {
         Self {
             state: Processing,
             fingerprint,
@@ -40,6 +33,8 @@ impl IdempotencyEntry<Processing> {
 
     /// Completes this entry, consuming it and returning a `Completed` entry.
     ///
+    /// The completed entry carries `completed_ttl` as its replay lease.
+    ///
     /// # Examples:
     ///
     /// ```
@@ -47,19 +42,23 @@ impl IdempotencyEntry<Processing> {
     /// # use idempotent::{CachedResponse, IdempotencyEntry, Metadata};
     /// # use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
     /// let fingerprint = DefaultFingerprintStrategy.compute("/get", &[2]);
-    /// let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(2));
+    /// let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
     /// let response = CachedResponse {
     ///     status_code: 200,
     ///     metadata: Metadata::default(),
     ///     body: vec![].into(),
     /// };
-    /// let _ = entry.complete(response);
+    /// let _ = entry.complete(response, Duration::from_secs(86_400));
     /// ```
     #[must_use]
-    pub const fn complete(self, response: CachedResponse) -> IdempotencyEntry<Completed> {
+    pub const fn complete(
+        self,
+        response: CachedResponse,
+        completed_ttl: Duration,
+    ) -> IdempotencyEntry<Completed> {
         IdempotencyEntry {
             fingerprint: self.fingerprint,
-            ttl: self.ttl,
+            ttl: completed_ttl,
             state: Completed { response },
         }
     }
@@ -74,13 +73,6 @@ impl IdempotencyEntry<Completed> {
     /// Consumes the entry, returning the cached response.
     pub fn into_response(self) -> CachedResponse {
         self.state.response
-    }
-}
-
-impl<State: EntryState> IdempotencyEntry<State> {
-    /// Returns `true` if `fingerprint` matches this entry's fingerprint.
-    pub fn fingerprint_matches(&self, fingerprint: Fingerprint) -> bool {
-        self.fingerprint == fingerprint
     }
 }
 
@@ -138,7 +130,6 @@ impl EntryState for Completed {}
 mod tests {
     use std::time::Duration;
 
-    use googletest::assert_that;
     use googletest::expect_that;
     use googletest::gtest;
     use googletest::matchers::eq;
@@ -172,17 +163,10 @@ mod tests {
             metadata: Metadata::default(),
             body: vec![].into(),
         };
-        let completed_entry = entry.complete(response.clone());
+        let completed_entry = entry.complete(response.clone(), Duration::from_secs(60));
 
         let state = Completed { response };
         expect_that!(completed_entry.state, eq(&state));
-    }
-
-    #[gtest]
-    fn entry_fingerprint_matches() {
-        let fingerprint = Fingerprint(0x1ab950a);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
-        assert_that!(entry.fingerprint_matches(fingerprint), eq(true))
     }
 
     #[gtest]
@@ -196,15 +180,14 @@ mod tests {
             metadata: Metadata::default(),
             body: vec![].into(),
         };
-        let completed_entry = entry.complete(response.clone());
+        let completed_entry = entry.complete(response.clone(), Duration::from_secs(60));
         expect_that!(completed_entry.fingerprint, eq(fingerprint));
     }
 
     #[gtest]
-    fn complete_idempotency_entry_preserve_ttl() {
+    fn complete_idempotency_entry_sets_completed_ttl() {
         let fingerprint = Fingerprint(0x1ab950a);
-        let ttl = Duration::from_nanos(1);
-        let entry = IdempotencyEntry::new(fingerprint, ttl);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
         expect_that!(entry.fingerprint, eq(fingerprint));
         expect_that!(entry.state, pat!(Processing));
         let response = CachedResponse {
@@ -212,7 +195,8 @@ mod tests {
             metadata: Metadata::default(),
             body: vec![].into(),
         };
-        let completed_entry = entry.complete(response.clone());
-        expect_that!(completed_entry.ttl, eq(ttl));
+        let completed_ttl = Duration::from_secs(60);
+        let completed_entry = entry.complete(response.clone(), completed_ttl);
+        expect_that!(completed_entry.ttl, eq(completed_ttl));
     }
 }

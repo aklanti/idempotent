@@ -92,7 +92,8 @@ impl TryFrom<WireEntry> for ExistingEntry {
                 let response = wire.response.ok_or_else(|| {
                     ValkeyError::Decode("completed entry missing response".into())
                 })?;
-                let entry = IdempotencyEntry::new(wire.fingerprint, wire.ttl).complete(response);
+                let entry =
+                    IdempotencyEntry::new(wire.fingerprint, wire.ttl).complete(response, wire.ttl);
                 Ok(ExistingEntry::Completed(entry))
             }
         }

@@ -86,8 +86,10 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     }
     /// Marks a claimed key as completed and caches its response.
     ///
-    /// The fencing token must match the one returned by [`Self::try_insert`]; the returned
-    /// [`FencedOutcome`] reports whether the write applied or was fenced out.
+    /// The entry's `ttl` is the completed lease. The fencing token must match the one returned
+    /// by [`Self::try_insert`].
+    ///
+    /// The returned [`FencedOutcome`] reports whether the write applied or was fenced out.
     ///
     /// # Errors
     ///
@@ -97,7 +99,6 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-        completed_ttl: Duration,
     ) -> impl Future<Output = Result<FencedOutcome, Self::Error>> + Send;
 
     /// Removes an idempotency entry if the fencing token still owns the claim.
@@ -146,7 +147,7 @@ pub enum InsertResult {
     Exists(ExistingEntry),
 }
 
-/// The boxed error type returned by [`AnyIdempotencyStore`].
+/// The error type of [`IdempotencyStoreHandle`] operations.
 #[derive(Debug)]
 pub struct BoxError(Box<dyn std::error::Error + Send + Sync>);
 
@@ -171,9 +172,8 @@ impl std::error::Error for BoxError {
 
 /// The store operations behind [`IdempotencyStoreHandle`].
 ///
-/// Every [`IdempotencyStore`] implements it automatically; use the handle rather than this
-/// trait directly.
-pub trait AnyIdempotencyStore: Send + Sync + 'static {
+/// This trait provides object safety and a blanket implementation for every [`IdempotencyStore`].
+trait AnyIdempotencyStore: Send + Sync + 'static {
     /// Claims `key`.
     fn try_insert<'a>(
         &'a self,
@@ -187,7 +187,6 @@ pub trait AnyIdempotencyStore: Send + Sync + 'static {
         key: &'a IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-        completed_ttl: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<FencedOutcome, BoxError>> + Send + 'a>>;
 
     /// Frees `key` if `fencing_token` still owns the claim.
@@ -231,10 +230,9 @@ impl<S: IdempotencyStore> AnyIdempotencyStore for S {
         key: &'a IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-        completed_ttl: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<FencedOutcome, BoxError>> + Send + 'a>> {
         Box::pin(async move {
-            IdempotencyStore::complete(self, key, entry, fencing_token, completed_ttl)
+            IdempotencyStore::complete(self, key, entry, fencing_token)
                 .await
                 .map_err(BoxError::new)
         })
@@ -314,11 +312,8 @@ impl IdempotencyStore for IdempotencyStoreHandle {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-        completed_ttl: Duration,
     ) -> Result<FencedOutcome, Self::Error> {
-        self.0
-            .complete(key, entry, fencing_token, completed_ttl)
-            .await
+        self.0.complete(key, entry, fencing_token).await
     }
 
     async fn remove(
