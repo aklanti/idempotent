@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::Error;
 
-/// A validated idempotency key extracted from a request metadata
+/// A validated idempotency key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IdempotencyKey(String);
 
@@ -13,10 +13,15 @@ impl IdempotencyKey {
     const MAX_LEN: usize = u8::MAX as usize;
     /// Prefix / tenancy boundary. Reserved: forbidden in keys and prefixes.
     const PREFIX_SEPARATOR: char = ':';
-    /// Scope boundary (Change 24). Reserved likewise.
+    /// Scope boundary. Reserved likewise.
     pub const SCOPE_SEPARATOR: char = '/';
 
-    /// Creates a new idempotency key
+    /// Creates an idempotency key, validating its length and character set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `value` is empty, exceeds 255 bytes, or contains a control character
+    /// or a reserved separator (`:` or `/`).
     ///
     /// # Examples
     ///

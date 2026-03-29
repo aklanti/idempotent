@@ -1,6 +1,4 @@
-//! Error types for idempotency key validation.
-
-/// Idempotency error
+/// The error returned by fallible idempotency operations.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The key is empty.

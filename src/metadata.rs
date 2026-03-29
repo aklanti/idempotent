@@ -10,37 +10,37 @@ use bytes::Bytes;
 pub struct Metadata(pub(crate) HashMap<String, Bytes>);
 
 impl Metadata {
-    /// Create new empty metadata.
+    /// Creates empty metadata.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Insert new metadata.
+    /// Inserts a key/value pair, returning the previous value for `key` if it was set.
     pub fn insert(&mut self, key: String, value: Bytes) -> Option<Bytes> {
         self.0.insert(key, value)
     }
 
-    /// Returns the metadata value for key.
+    /// Returns the value for `key`.
     pub fn get(&self, key: &str) -> Option<&Bytes> {
         self.0.get(key)
     }
 
-    /// Returns an iterator over the key/value pair.
+    /// Returns an iterator over the key/value pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Bytes)> {
         self.0.iter()
     }
 
-    /// Returns the number of metadata.
+    /// Returns the number of entries.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Returns true if there are no metadata otherwise false.
+    /// Returns `true` if there are no entries.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Remove the metadata associated with the key.
+    /// Removes and returns the value for `key`.
     pub fn remove(&mut self, key: &str) -> Option<Bytes> {
         self.0.remove(key)
     }
