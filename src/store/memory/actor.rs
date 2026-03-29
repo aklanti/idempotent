@@ -61,6 +61,9 @@ impl MemoryStoreActor {
                         Command::Purge{key, reply} => {
                             self.purge(&key);
                             let _ = reply.send(());
+                        },
+                        Command::Len{reply} => {
+                            let _ = reply.send(self.entries.len());
                         }
                   }
               },

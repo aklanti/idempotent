@@ -44,4 +44,8 @@ pub enum Command {
         key: IdempotencyKey,
         reply: oneshot::Sender<()>,
     },
+
+    Len {
+        reply: oneshot::Sender<usize>,
+    },
 }

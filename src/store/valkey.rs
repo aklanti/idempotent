@@ -103,6 +103,22 @@ impl ValkeyStore {
         format!("{}::idempotent_ft_seq", self.service_name)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            name = "ValkeyStore::ping",
+            skip(self),
+            fields(prefix = ?self.service_name),
+            err(Display),
+        )
+    )]
+    pub async fn ping(&self) -> Result<(), ValkeyError> {
+        redis::cmd("PING")
+            .query_async::<()>(&mut self.conn.clone())
+            .await?;
+        Ok(())
+    }
+
     /// Creates a store from an already-connected manager.
     pub fn from_connection_manager(
         service_name: impl Into<String>,

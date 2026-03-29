@@ -71,6 +71,22 @@ impl MemoryStore {
             runtime: None,
         }
     }
+
+    /// The number of entries in memory.
+    pub async fn len(&self) -> Result<usize, MemoryStoreError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Len { reply })
+            .await
+            .map_err(|_| MemoryStoreError::TaskStopped)?;
+
+        rx.await.map_err(|_| MemoryStoreError::TaskStopped)
+    }
+
+    /// Return true if the lenght is zero.
+    pub async fn is_empty(&self) -> Result<bool, MemoryStoreError> {
+        self.len().await.map(|v| v == 0)
+    }
 }
 
 impl fmt::Debug for MemoryStore {
