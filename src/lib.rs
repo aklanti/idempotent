@@ -25,6 +25,8 @@ pub use self::key::IdempotencyKey;
 #[doc(inline)]
 pub use self::metadata::Metadata;
 #[doc(inline)]
+pub use self::store::CompleteResult;
+#[doc(inline)]
 pub use self::store::IdempotencyStore;
 #[doc(inline)]
 pub use self::store::InsertResult;

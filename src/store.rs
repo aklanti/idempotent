@@ -36,7 +36,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<CompleteResult, Self::Error>;
 
     /// Removes an idempotency entry
     async fn remove(&self, key: &IdempotencyKey) -> Result<(), Self::Error>;
@@ -55,4 +55,15 @@ pub enum InsertResult {
     },
     /// A key already exists
     Exists(ExistingEntry),
+}
+
+/// The result when the operation completes.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum CompleteResult {
+    /// The operation is complete and the result stored.
+    Stored,
+    /// The supplied and expected fencing token do not match.
+    FencingMismatch,
+    /// The idempotency key has expired.
+    KeyExpired,
 }

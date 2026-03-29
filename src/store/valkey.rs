@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use self::claim::ClaimReply;
+use crate::CompleteResult;
 use crate::IdempotencyStore;
 use crate::InsertResult;
 use crate::entry::CachedResponse;
@@ -119,19 +120,31 @@ impl IdempotencyStore for ValkeyStore {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<CompleteResult, Self::Error> {
         let prefixed = self.prefixed_key(key);
         let ttl_ms = entry.ttl.as_millis();
         let serialized = WireEntry::from(&entry).to_bytes()?;
         let script = Script::new(Self::COMPLETE_SCRIPT);
-        script
+        match script
             .key(&prefixed)
             .arg(serialized)
             .arg(fencing_token)
             .arg(ttl_ms)
             .invoke_async::<()>(&mut self.conn.clone())
-            .await?;
-        Ok(())
+            .await
+        {
+            Ok(_) => Ok(CompleteResult::Stored),
+            Err(err) => {
+                let msg = err.to_string();
+                if msg.contains("KEY_MISSING") {
+                    return Ok(CompleteResult::KeyExpired);
+                } else if msg.contains("FENCING_MISMATCH") {
+                    Ok(CompleteResult::FencingMismatch)
+                } else {
+                    return Err(ValkeyError::Connection(Box::new(err)));
+                }
+            }
+        }
     }
 
     #[cfg_attr(
@@ -356,7 +369,7 @@ mod tests {
         let completed = entry.complete(response);
         let result = store.complete(&key, completed, fencing_token).await;
 
-        expect_that!(result, pat!(Ok(())));
+        expect_that!(result, ok(eq(&CompleteResult::Stored)));
         let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
         let replay = store.try_insert(&key, entry).await;
         let Ok(InsertResult::Exists(ExistingEntry::Completed(entry))) = replay else {

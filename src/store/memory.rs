@@ -10,6 +10,7 @@ use tokio::sync::oneshot;
 
 use super::IdempotencyStore;
 use super::InsertResult;
+use crate::CompleteResult;
 use crate::entry::Completed;
 use crate::entry::ExistingEntry;
 use crate::entry::IdempotencyEntry;
@@ -79,7 +80,7 @@ impl IdempotencyStore for MemoryStore {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<CompleteResult, Self::Error> {
         let (reply, rx) = oneshot::channel();
         let action = StoreAction::Complete {
             key: key.clone(),
@@ -89,7 +90,7 @@ impl IdempotencyStore for MemoryStore {
         };
         let _ = self.tx.send(action).await;
         rx.await.expect("a response");
-        Ok(())
+        Ok(CompleteResult::Stored)
     }
 
     #[cfg_attr(
@@ -190,15 +191,21 @@ impl StoreState {
         key: IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-    ) {
+    ) -> CompleteResult {
         if let Some(record) = self.entries.get_mut(&key)
             && let ExistingEntry::Processing(_) = &record.existing
-            && record.fencing_token == fencing_token
         {
-            record.ttl = entry.ttl;
-            record.existing = ExistingEntry::Completed(entry);
-            record.created_at = Instant::now();
+            if record.fencing_token == fencing_token {
+                record.ttl = entry.ttl;
+                record.existing = ExistingEntry::Completed(entry);
+                record.created_at = Instant::now();
+                return CompleteResult::Stored;
+            }
+
+            return CompleteResult::FencingMismatch;
         }
+
+        CompleteResult::KeyExpired
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(name = "StoreState::remove"))]
