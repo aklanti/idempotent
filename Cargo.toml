@@ -16,7 +16,7 @@ features = ["memory", "middleware", "serde", "tonic", "tracing", "uuid", "valkey
 [features]
 default = ["uuid"]
 memory = ["tokio/time", "tokio/macros"]
-middleware = ["dep:http", "dep:tower", "http-body", "http-body-util"]
+middleware = ["dep:http", "dep:http-body", "dep:http-body-util", "dep:tower"]
 serde = ["dep:serde", "bytes/serde", "uuid?/serde"]
 tonic = ["dep:tonic", "middleware"]
 tracing = ["dep:tracing"]
@@ -27,12 +27,12 @@ valkey = ["dep:redis", "dep:postcard", "serde"]
 bytes = { version = "1" }
 http = { version = "1", optional = true }
 http-body = { version = "1", optional = true }
-http-body-util = { version = "1", optional = true }
+http-body-util = { version = "0.1", optional = true }
 postcard = { version = "1", optional = true, features = ["alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt"] }
-tonic = { version = "0.14", optional = true }
+tonic = { version = "0.14", default-features = false, optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
 tracing = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
@@ -42,7 +42,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 version = "1"
 default-features = false
 features = ["aio", "connection-manager", "tokio-rustls-comp", "script"]
-optional = true 
+optional = true
 
 [dev-dependencies]
 googletest = { version = "0.14", features = ["proptest"] }

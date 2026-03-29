@@ -62,8 +62,7 @@ static TOUCH_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
 });
 
 /// An [`IdempotencyStore`] backed by Valkey or Redis.
-///
-/// See the [module-level documentation](self) for server requirements.
+#[derive(Clone)]
 pub struct ValkeyStore {
     /// Key prefix that isolates this store's keys and its fencing-token counter
     /// from other services on the same server.
@@ -334,10 +333,14 @@ mod tests {
     use testcontainers_modules::valkey::Valkey;
 
     use super::*;
+
     use crate::Metadata;
     use crate::entry::CachedResponse;
     use crate::fingerprint::DefaultFingerprintStrategy;
     use crate::fingerprint::FingerprintStrategy;
+
+    const fn assert_usable_with_middleware<S: IdempotencyStore + Clone + Send + Sync + 'static>() {}
+    const _: () = assert_usable_with_middleware::<ValkeyStore>();
 
     const TTL: Duration = Duration::from_secs(60);
 

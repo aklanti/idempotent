@@ -287,6 +287,9 @@ mod tests {
     use crate::fingerprint::DefaultFingerprintStrategy;
     use crate::fingerprint::FingerprintStrategy;
 
+    const fn assert_usable_with_middleware<S: IdempotencyStore + Clone + Send + Sync + 'static>() {}
+    const _: () = assert_usable_with_middleware::<MemoryStore>();
+
     const TTL: Duration = Duration::from_secs(60);
 
     #[gtest]
