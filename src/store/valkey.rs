@@ -70,11 +70,16 @@ pub struct ValkeyStore {
 }
 
 impl ValkeyStore {
-    /// Creates a new store instance without key prefix.
-    pub async fn new(service_name: &str, client: Client) -> Result<Self, ValkeyError> {
+    /// Opens the managed connection from `client` and creates a store.
+    ///
+    /// Use [`Self::from_connection_manager`] to wrap an already-connected manager.
+    pub async fn connect(
+        service_name: impl Into<String>,
+        client: Client,
+    ) -> Result<Self, ValkeyError> {
         let conn = client.get_connection_manager().await?;
         let store = Self {
-            service_name: service_name.to_owned(),
+            service_name: service_name.into(),
             conn,
         };
 
@@ -89,6 +94,25 @@ impl ValkeyStore {
     /// Returns the fencing token key name.
     fn counter_key(&self) -> String {
         format!("{}__idempotent_ft_seq", self.service_name)
+    }
+
+    /// Creates a store from an already-connected manager.
+    pub fn from_connection_manager(
+        service_name: impl Into<String>,
+        conn: ConnectionManager,
+    ) -> Self {
+        Self {
+            service_name: service_name.into(),
+            conn,
+        }
+    }
+
+    /// Starts building a store backed by `client`, with no key prefix by default.
+    pub const fn with_client(client: Client) -> ValkeyStoreBuilder {
+        ValkeyStoreBuilder {
+            client,
+            prefix: None,
+        }
     }
 }
 
@@ -235,6 +259,31 @@ impl IdempotencyStore for ValkeyStore {
     }
 }
 
+/// Builder for [`ValkeyStore`].
+pub struct ValkeyStoreBuilder {
+    client: Client,
+    prefix: Option<String>,
+}
+
+impl ValkeyStoreBuilder {
+    /// Sets the key prefix (service name).
+    ///
+    /// The prefix must not contain the reserved separator or scope `/`.
+    pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefix = Some(prefix.into());
+        self
+    }
+
+    /// Resolves the `Client` to a `ConnectionManager` and builds the store.
+    pub async fn build(self) -> Result<ValkeyStore, ValkeyError> {
+        let conn = self.client.get_connection_manager().await?;
+        Ok(ValkeyStore::from_connection_manager(
+            self.prefix.unwrap_or_default(),
+            conn,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
@@ -263,7 +312,7 @@ mod tests {
             .expect("to get container port");
         let client =
             redis::Client::open(format!("redis://127.0.0.1:{port}")).expect("to connect to Valkey");
-        let store = ValkeyStore::new("test", client)
+        let store = ValkeyStore::connect("test", client)
             .await
             .expect("to create a store");
         (store, container)

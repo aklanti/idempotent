@@ -42,6 +42,14 @@ impl MemoryStore {
         tokio::spawn(store_state.run(rx, sweep_interval));
         Self { tx }
     }
+
+    /// Starts building a store with default settings
+    pub const fn builder() -> MemoryStoreBuilder {
+        MemoryStoreBuilder {
+            buffer: 64,
+            sweep_interval: Duration::from_secs(60),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -153,6 +161,31 @@ impl IdempotencyStore for MemoryStore {
         };
         self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
         rx.await.map_err(|_| MemoryStoreError)
+    }
+}
+
+/// Memory store builder.
+pub struct MemoryStoreBuilder {
+    buffer: usize,
+    sweep_interval: Duration,
+}
+
+impl MemoryStoreBuilder {
+    /// Sets the command-channel capacity. The value must be greater than `0`.
+    pub const fn buffer(mut self, buffer: usize) -> Self {
+        self.buffer = buffer;
+        self
+    }
+
+    /// Sets how often expired entries are swept.
+    pub const fn sweep_interval(mut self, interval: Duration) -> Self {
+        self.sweep_interval = interval;
+        self
+    }
+
+    /// Builds the store, spawning its background task.
+    pub fn build(self) -> MemoryStore {
+        MemoryStore::new(self.buffer, self.sweep_interval)
     }
 }
 
