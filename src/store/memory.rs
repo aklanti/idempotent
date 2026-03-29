@@ -1,7 +1,6 @@
 //! In-memory idempotency store.
 
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -44,7 +43,7 @@ impl MemoryStore {
 
 #[async_trait::async_trait]
 impl IdempotencyStore for MemoryStore {
-    type Error = Infallible;
+    type Error = MemoryStoreError;
 
     #[cfg_attr(
         feature = "tracing",
@@ -52,7 +51,7 @@ impl IdempotencyStore for MemoryStore {
             name = "MemoryStore::try_insert",
             skip(self),
             fields(key = %key),
-            err(Debug),
+            err(Display),
         )
     )]
     async fn try_insert(
@@ -66,14 +65,13 @@ impl IdempotencyStore for MemoryStore {
             entry,
             reply,
         };
-        let _ = self.tx.send(action).await;
-        let result = rx.await.expect("a response");
-        Ok(result)
+        self.tx.send(action).await.map_err(|_| MemoryStoreError)?;
+        rx.await.map_err(|_| MemoryStoreError)
     }
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStore::complete", skip(self), err(Debug))
+        tracing::instrument(name = "MemoryStore::complete", skip(self), fields(key  = %key), err(Display))
     )]
     async fn complete(
         &self,
@@ -93,14 +91,14 @@ impl IdempotencyStore for MemoryStore {
             fencing_token,
             reply,
         };
-        let _ = self.tx.send(action).await;
-        rx.await.expect("a response");
-        Ok(FencedOutcome::Applied)
+
+        self.tx.send(action).await.map_err(|_| MemoryStoreError)?;
+        rx.await.map_err(|_| MemoryStoreError)
     }
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStore::remove", skip(self), err(Debug))
+        tracing::instrument(name = "MemoryStore::remove", skip(self), err(Display))
     )]
     async fn remove(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
         let (reply, rx) = oneshot::channel();
@@ -115,7 +113,7 @@ impl IdempotencyStore for MemoryStore {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStore::touch", skip(self), err(Debug))
+        tracing::instrument(name = "MemoryStore::touch", skip(self), err(Display))
     )]
     async fn touch(
         &self,
@@ -131,11 +129,15 @@ impl IdempotencyStore for MemoryStore {
             reply,
         };
 
-        let _ = self.tx.send(action).await;
-        rx.await.expect("a response");
-        Ok(FencedOutcome::Applied)
+        self.tx.send(action).await.map_err(|_| MemoryStoreError)?;
+        rx.await.map_err(|_| MemoryStoreError)
     }
 }
+
+/// The error type for the operations on memory store.
+#[derive(Debug, thiserror::Error)]
+#[error("memory store task stopped")]
+pub struct MemoryStoreError;
 
 #[derive(Debug, Default)]
 struct StoreState {
@@ -190,7 +192,7 @@ impl StoreState {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "StoreState::try_insert")
+        tracing::instrument(name = "StoreState::try_insert", skip(self), fields(key = %key)),
     )]
     fn try_insert(
         &mut self,
@@ -243,12 +245,18 @@ impl StoreState {
         FencedOutcome::KeyExpired
     }
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "StoreState::remove"))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "StoreState::remove", fields(key = %key)),
+    )]
     fn remove(&mut self, key: &IdempotencyKey) {
         self.entries.remove(key);
     }
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "StoreState::touch"))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "StoreState::touch", fields(key = %key)),
+    )]
     fn touch(
         &mut self,
         key: &IdempotencyKey,
