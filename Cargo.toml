@@ -16,26 +16,25 @@ features = ["memory", "serde", "tracing", "uuid", "valkey"]
 [features]
 default = ["uuid"]
 memory = ["tokio/time", "tokio/macros"]
-serde = ["dep:serde"]
+serde = ["dep:serde", "bytes/serde", "uuid?/serde"]
 tracing = ["dep:tracing"]
 uuid = ["dep:uuid"]
 valkey = ["dep:redis", "dep:postcard", "serde"]
 
 [dependencies]
-async-trait = "0.1"
 bytes = { version = "1", features = ["serde"] }
 postcard = { version = "1", optional = true, features = ["alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt"] }
 tracing = { version = "0.1", optional = true }
-uuid = { version = "1", features = ["serde", "v4"], optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dependencies.redis]
 version = "1"
 default-features = false
-features = ["aio", "connection-manager", "tokio-rustls-comp", "script", "uuid"]
+features = ["aio", "connection-manager", "tokio-rustls-comp", "script"]
 optional = true 
 
 [dev-dependencies]
@@ -43,10 +42,11 @@ googletest = { version = "0.14", features = ["proptest"] }
 proptest = "1.11"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["valkey"] }
-tokio = { version = "1", features = ["time", "rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [lints.clippy]
 allow_attributes_without_reason = "warn"
+expect_used = "deny"
 missing_const_for_fn = "warn"
 mod_module_files = "warn"
 option_if_let_else = "warn"
