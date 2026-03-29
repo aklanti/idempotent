@@ -351,6 +351,8 @@ mod tests {
         let InsertResult::Claimed { fencing_token } = first.expect("a result") else {
             return;
         };
+
+        expect_that!(fencing_token.value(), eq(1));
         let completed = entry.complete(response);
         let result = store.complete(&key, completed, fencing_token).await;
 
@@ -363,5 +365,28 @@ mod tests {
         let response = entry.response();
         expect_that!(response.status_code, eq(200));
         expect_that!(response.body, eq(&Bytes::from_static(b"ok")));
+    }
+
+    #[tokio::test]
+    #[gtest]
+    async fn consecutive_call_generate_consecutive_fencing_token() {
+        let (store, _container) = new_store().await;
+
+        let key = IdempotencyKey::new("sankara").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let first = store.try_insert(&key, entry.clone()).await;
+        let InsertResult::Claimed { fencing_token } = first.expect("a result") else {
+            return;
+        };
+        expect_that!(fencing_token.value(), eq(1));
+
+        // let fingerprint = DefaultFingerprintStrategy.compute("/accept", &[]);
+        // let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let second = store.try_insert(&key, entry.clone()).await;
+        let InsertResult::Claimed { fencing_token } = second.expect("a result") else {
+            return;
+        };
+        expect_that!(fencing_token.value(), eq(2));
     }
 }
