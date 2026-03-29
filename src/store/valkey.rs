@@ -30,7 +30,9 @@ mod claim;
 mod error;
 mod wire;
 
-use self::error::ValkeyError;
+#[doc(inline)]
+pub use self::error::ValkeyError;
+#[doc(inline)]
 use self::wire::WireEntry;
 
 /// Lua script for atomic key claiming. Returns `nil` on success
