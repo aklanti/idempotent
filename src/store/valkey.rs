@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use self::claim::ClaimReply;
-use crate::CompleteResult;
+use crate::FencedOutcome;
 use crate::IdempotencyStore;
 use crate::InsertResult;
 use crate::entry::CachedResponse;
@@ -120,25 +120,21 @@ impl IdempotencyStore for ValkeyStore {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-    ) -> Result<CompleteResult, Self::Error> {
+        completed_ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error> {
         let prefixed = self.prefixed_key(key);
-        let ttl_ms = entry.ttl.as_millis();
         let serialized = WireEntry::from(&entry).to_bytes()?;
         let script = Script::new(Self::COMPLETE_SCRIPT);
         let value: i64 = script
             .key(&prefixed)
             .arg(serialized)
             .arg(fencing_token)
-            .arg(ttl_ms)
+            .arg(completed_ttl.as_millis())
             .invoke_async(&mut self.conn.clone())
             .await?;
 
-        match value {
-            0 => Ok(CompleteResult::Stored),
-            1 => Ok(CompleteResult::FencingMismatch),
-            2 => Ok(CompleteResult::KeyExpired),
-            _ => return Err(ValkeyError::Decode("invalid return type".into())),
-        }
+        FencedOutcome::try_from(value)
+            .map_err(|_| ValkeyError::Decode("invalid return type".into()))
     }
 
     #[cfg_attr(
@@ -309,7 +305,7 @@ mod tests {
     use crate::fingerprint::DefaultFingerprintStrategy;
     use crate::fingerprint::FingerprintStrategy;
 
-    const SECONDS: u64 = 60;
+    const TTL: Duration = Duration::from_secs(60);
 
     async fn new_store() -> (ValkeyStore, impl Drop) {
         let container = Valkey::default().start().await.expect("Valkey to start");
@@ -331,7 +327,7 @@ mod tests {
         let (store, _container) = new_store().await;
         let key = IdempotencyKey::new("sankara").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let result = store.try_insert(&key, entry).await;
         expect_that!(
             result,
@@ -348,7 +344,7 @@ mod tests {
 
         let key = IdempotencyKey::new("sankara").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let response = CachedResponse {
             status_code: 200,
             metadata: Metadata::default(),
@@ -361,10 +357,10 @@ mod tests {
 
         expect_that!(fencing_token.value(), eq(1));
         let completed = entry.complete(response);
-        let result = store.complete(&key, completed, fencing_token).await;
+        let result = store.complete(&key, completed, fencing_token, TTL).await;
 
-        expect_that!(result, ok(eq(&CompleteResult::Stored)));
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        expect_that!(result, ok(eq(&FencedOutcome::Applied)));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let replay = store.try_insert(&key, entry).await;
         let Ok(InsertResult::Exists(ExistingEntry::Completed(entry))) = replay else {
             panic!("expected Exists(Completed), got {replay:?}")
@@ -381,7 +377,7 @@ mod tests {
 
         let key = IdempotencyKey::new("sankara").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let first = store.try_insert(&key, entry.clone()).await;
 
         expect_that!(
@@ -393,7 +389,7 @@ mod tests {
 
         let key = IdempotencyKey::new("soyinka").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/accept", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let second = store.try_insert(&key, entry.clone()).await;
         expect_that!(
             second,

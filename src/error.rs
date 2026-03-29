@@ -13,5 +13,9 @@ pub enum Error {
 
     /// The fencing token is invalid.
     #[error("negative fencing token")]
-    InvalidFencingToken,
+    NegativeFencingToken,
+
+    /// The fencing outcome is unexpected.
+    #[error("unexpected fenced outcome: {0}")]
+    UnexpectedFencedOutcome(i64),
 }

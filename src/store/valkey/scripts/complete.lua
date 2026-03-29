@@ -1,7 +1,7 @@
 -- KEYS[1] = idempotency key
 -- ARGV[1] = serialized Completed entry
 -- ARGV[2] = fencing_token
--- ARGV[3] = ttl_ms
+-- ARGV[3] = ttl_ms on completion.
 
 local current_token = redis.call('HGET', KEYS[1], 'ft')
 if not current_token then

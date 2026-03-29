@@ -5,6 +5,9 @@ pub mod memory;
 #[cfg(feature = "valkey")]
 pub mod valkey;
 
+use std::time::Duration;
+
+use crate::FencedOutcome;
 use crate::entry::Completed;
 use crate::entry::ExistingEntry;
 use crate::entry::IdempotencyEntry;
@@ -36,7 +39,8 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-    ) -> Result<CompleteResult, Self::Error>;
+        completed_ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error>;
 
     /// Removes an idempotency entry
     async fn remove(&self, key: &IdempotencyKey) -> Result<(), Self::Error>;
@@ -55,15 +59,4 @@ pub enum InsertResult {
     },
     /// A key already exists
     Exists(ExistingEntry),
-}
-
-/// The result when the operation completes.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum CompleteResult {
-    /// The operation is complete and the result stored.
-    Stored,
-    /// The supplied and expected fencing token do not match.
-    FencingMismatch,
-    /// The idempotency key has expired.
-    KeyExpired,
 }

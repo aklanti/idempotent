@@ -19,13 +19,13 @@ pub use self::entry::IdempotencyEntry;
 #[doc(inline)]
 pub use self::error::Error;
 #[doc(inline)]
+pub use self::fencing_token::FencedOutcome;
+#[doc(inline)]
 pub use self::fingerprint::Fingerprint;
 #[doc(inline)]
 pub use self::key::IdempotencyKey;
 #[doc(inline)]
 pub use self::metadata::Metadata;
-#[doc(inline)]
-pub use self::store::CompleteResult;
 #[doc(inline)]
 pub use self::store::IdempotencyStore;
 #[doc(inline)]

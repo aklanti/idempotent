@@ -19,7 +19,35 @@ impl TryFrom<i64> for FencingToken {
 
     fn try_from(value: i64) -> Result<Self, Self::Error> {
         u64::try_from(value)
-            .map_err(|_| Error::InvalidFencingToken)
+            .map_err(|_| Error::NegativeFencingToken)
             .map(Self)
+    }
+}
+
+/// The result when the operation completes.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum FencedOutcome {
+    /// The operation is complete and the result stored.
+    Applied,
+    /// The supplied and expected fencing token do not match.
+    FencingMismatch,
+    /// The idempotency key has expired.
+    KeyExpired,
+}
+
+impl TryFrom<i64> for FencedOutcome {
+    type Error = Error;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        let me = match value {
+            0 => Self::Applied,
+            1 => Self::FencingMismatch,
+            2 => Self::KeyExpired,
+            other => {
+                return Err(Error::UnexpectedFencedOutcome(other));
+            }
+        };
+
+        Ok(me)
     }
 }

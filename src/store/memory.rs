@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 use super::IdempotencyStore;
 use super::InsertResult;
-use crate::CompleteResult;
+use crate::FencedOutcome;
 use crate::entry::Completed;
 use crate::entry::ExistingEntry;
 use crate::entry::IdempotencyEntry;
@@ -80,8 +80,13 @@ impl IdempotencyStore for MemoryStore {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-    ) -> Result<CompleteResult, Self::Error> {
+        completed_ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error> {
         let (reply, rx) = oneshot::channel();
+
+        let mut entry = entry;
+        entry.ttl = completed_ttl;
+
         let action = StoreAction::Complete {
             key: key.clone(),
             entry,
@@ -90,7 +95,7 @@ impl IdempotencyStore for MemoryStore {
         };
         let _ = self.tx.send(action).await;
         rx.await.expect("a response");
-        Ok(CompleteResult::Stored)
+        Ok(FencedOutcome::Applied)
     }
 
     #[cfg_attr(
@@ -191,7 +196,7 @@ impl StoreState {
         key: IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
-    ) -> CompleteResult {
+    ) -> FencedOutcome {
         if let Some(record) = self.entries.get_mut(&key)
             && let ExistingEntry::Processing(_) = &record.existing
         {
@@ -199,13 +204,13 @@ impl StoreState {
                 record.ttl = entry.ttl;
                 record.existing = ExistingEntry::Completed(entry);
                 record.created_at = Instant::now();
-                return CompleteResult::Stored;
+                return FencedOutcome::Applied;
             }
 
-            return CompleteResult::FencingMismatch;
+            return FencedOutcome::FencingMismatch;
         }
 
-        CompleteResult::KeyExpired
+        FencedOutcome::KeyExpired
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(name = "StoreState::remove"))]
@@ -247,7 +252,7 @@ enum StoreAction {
         entry: IdempotencyEntry<Completed>,
         /// A fencing token from the claimed result
         fencing_token: FencingToken,
-        reply: oneshot::Sender<CompleteResult>,
+        reply: oneshot::Sender<FencedOutcome>,
     },
     Remove {
         key: IdempotencyKey,
@@ -274,14 +279,14 @@ mod tests {
     use crate::fingerprint::DefaultFingerprintStrategy;
     use crate::fingerprint::FingerprintStrategy;
 
-    const SECONDS: u64 = 60;
+    const TTL: Duration = Duration::from_secs(60);
 
     #[gtest]
     fn insert_vacant_return_a_claim_with_fencing_token() {
         let mut store = StoreState::new();
         let key = IdempotencyKey::new("chimamanda").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let result = store.try_insert(key, entry);
         expect_that!(
             result,
@@ -296,7 +301,7 @@ mod tests {
         let mut store = StoreState::new();
         let key = IdempotencyKey::new("chimamanda").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
 
         let first = store.try_insert(key.clone(), entry.clone());
         expect_that!(
@@ -314,7 +319,7 @@ mod tests {
         let mut store = StoreState::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let response = CachedResponse {
             status_code: 200,
             metadata: Metadata::default(),
@@ -338,10 +343,7 @@ mod tests {
 
         let second = store.try_insert(
             key,
-            IdempotencyEntry::new(
-                DefaultFingerprintStrategy.compute("/submit", &[]),
-                Duration::from_secs(SECONDS),
-            ),
+            IdempotencyEntry::new(DefaultFingerprintStrategy.compute("/submit", &[]), TTL),
         );
         expect_that!(
             second,
@@ -382,7 +384,7 @@ mod tests {
         let mut store = StoreState::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let response = CachedResponse {
             status_code: 200,
             metadata: Metadata::default(),
@@ -401,10 +403,7 @@ mod tests {
         let wrong_token = FencingToken(u64::MAX);
         store.complete(key.clone(), completed, wrong_token);
 
-        let second = store.try_insert(
-            key,
-            IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS)),
-        );
+        let second = store.try_insert(key, IdempotencyEntry::new(fingerprint, TTL));
         expect_that!(
             second,
             pat!(InsertResult::Exists(pat!(ExistingEntry::Processing(
@@ -418,7 +417,7 @@ mod tests {
         let mut store = StoreState::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
 
         let first = store.try_insert(key.clone(), entry);
         expect_that!(
@@ -430,7 +429,7 @@ mod tests {
 
         store.remove(&key);
 
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let second = store.try_insert(key, entry);
         expect_that!(
             second,
@@ -479,7 +478,7 @@ mod tests {
         let mut store = StoreState::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
 
         let first = store.try_insert(key.clone(), entry);
         expect_that!(
@@ -491,7 +490,7 @@ mod tests {
 
         store.sweep();
 
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let second = store.try_insert(key, entry);
         expect_that!(second, pat!(InsertResult::Exists(_)));
     }
@@ -499,10 +498,10 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn insert_and_claim() {
-        let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
+        let store = MemoryStore::new(16, TTL);
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
 
         let result = store.try_insert(&key, entry).await;
         expect_that!(
@@ -516,10 +515,10 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn insert_duplicate_exists() {
-        let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
+        let store = MemoryStore::new(16, TTL);
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
 
         let first = store.try_insert(&key, entry.clone()).await;
         expect_that!(
@@ -529,7 +528,7 @@ mod tests {
             }))
         );
 
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let second = store.try_insert(&key, entry).await;
         expect_that!(second, ok(pat!(InsertResult::Exists(_))));
     }
@@ -537,10 +536,10 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn complete_and_replay() {
-        let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
+        let store = MemoryStore::new(16, TTL);
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let response = CachedResponse {
             status_code: 201,
             metadata: Metadata::default(),
@@ -554,11 +553,11 @@ mod tests {
 
         let completed = entry.complete(response.clone());
         store
-            .complete(&key, completed, fencing_token)
+            .complete(&key, completed, fencing_token, TTL)
             .await
             .expect("an insertion result");
 
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let replay = store.try_insert(&key, entry).await;
         let Ok(InsertResult::Exists(ExistingEntry::Completed(entry))) = replay else {
             panic!("expected Exists(Completed), got {replay:?}");
@@ -571,10 +570,10 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn complete_wrong_token() {
-        let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
+        let store = MemoryStore::new(16, TTL);
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let response = CachedResponse {
             status_code: 200,
             metadata: Metadata::default(),
@@ -589,15 +588,14 @@ mod tests {
             }))
         );
 
-        let completed =
-            IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS)).complete(response);
+        let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response);
         let wrong_token = FencingToken(4);
         store
-            .complete(&key, completed, wrong_token)
+            .complete(&key, completed, wrong_token, TTL)
             .await
             .expect("entry to complete");
 
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let second = store.try_insert(&key, entry).await;
         expect_that!(
             second,
@@ -610,10 +608,10 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn remove_and_reclaim() {
-        let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
+        let store = MemoryStore::new(16, TTL);
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
 
         let first = store.try_insert(&key, entry).await;
         expect_that!(
@@ -625,7 +623,7 @@ mod tests {
 
         store.remove(&key).await.expect("entry to be removed");
 
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let second = store.try_insert(&key, entry).await;
         expect_that!(
             second,
@@ -638,7 +636,7 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn concurrent_insert_one_wins() {
-        let store = Arc::new(MemoryStore::new(16, Duration::from_secs(SECONDS)));
+        let store = Arc::new(MemoryStore::new(16, TTL));
         let key = IdempotencyKey::new("makeba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/force", &[]);
 
@@ -648,7 +646,7 @@ mod tests {
             let store = Arc::clone(&store);
             let key = key.clone();
             let handle = tokio::spawn(async move {
-                let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+                let entry = IdempotencyEntry::new(fingerprint, TTL);
                 store.try_insert(&key, entry).await.expect("to succeed")
             });
             handles.push(handle);
@@ -671,7 +669,7 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn complete_under_contention() {
-        let store = Arc::new(MemoryStore::new(16, Duration::from_secs(SECONDS)));
+        let store = Arc::new(MemoryStore::new(16, TTL));
         let key = IdempotencyKey::new("sankara").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/one-africa", &[]);
         let response = CachedResponse {
@@ -680,7 +678,7 @@ mod tests {
             body: Bytes::from_static(b"ok"),
         };
 
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
         let InsertResult::Claimed { fencing_token } = store
             .try_insert(&key, entry.clone())
             .await
@@ -691,7 +689,7 @@ mod tests {
 
         let completed = entry.complete(response);
         store
-            .complete(&key, completed, fencing_token)
+            .complete(&key, completed, fencing_token, TTL)
             .await
             .expect("to complete side effect");
         let mut handles = Vec::with_capacity(10);
@@ -700,7 +698,7 @@ mod tests {
             let key = key.clone();
             let store = Arc::clone(&store);
             let handle = tokio::spawn(async move {
-                let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+                let entry = IdempotencyEntry::new(fingerprint, TTL);
                 store.try_insert(&key, entry).await.expect("to succeed")
             });
             handles.push(handle);
