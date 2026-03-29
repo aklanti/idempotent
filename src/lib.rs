@@ -8,6 +8,7 @@ pub mod entry;
 pub mod error;
 mod fencing_token;
 pub mod fingerprint;
+pub mod guard;
 pub mod key;
 pub mod metadata;
 pub mod store;
@@ -22,6 +23,8 @@ pub use self::error::Error;
 pub use self::fencing_token::FencedOutcome;
 #[doc(inline)]
 pub use self::fingerprint::Fingerprint;
+#[doc(inline)]
+pub use self::guard::ClaimGuard;
 #[doc(inline)]
 pub use self::key::IdempotencyKey;
 #[doc(inline)]
