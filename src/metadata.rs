@@ -1,48 +1,33 @@
 //! Response metadata
 
-use std::collections::HashMap;
-
 use bytes::Bytes;
 
-/// Response metadata stored as string-keyed byte values.
+/// Response metadata as ordered name/value pairs.
+///
+/// Names may repeat, matching HTTP headers and gRPC metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Metadata(pub(crate) HashMap<String, Bytes>);
+pub struct Metadata(Vec<(String, Bytes)>);
 
 impl Metadata {
     /// Creates empty metadata.
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self(Vec::new())
     }
 
-    /// Inserts a key/value pair, returning the previous value for `key` if it was set.
-    pub fn insert(&mut self, key: String, value: Bytes) -> Option<Bytes> {
-        self.0.insert(key, value)
+    /// Appends a name/value pair, keeping any existing values for the name.
+    pub fn append(&mut self, name: impl Into<String>, value: Bytes) {
+        self.0.push((name.into(), value));
     }
 
-    /// Returns the value for `key`.
-    pub fn get(&self, key: &str) -> Option<&Bytes> {
-        self.0.get(key)
+    /// Returns the first value for `name`.
+    pub fn get(&self, name: &str) -> Option<&Bytes> {
+        self.0.iter().find(|(n, _)| n == name).map(|(_, v)| v)
     }
 
-    /// Returns an iterator over the key/value pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &Bytes)> {
-        self.0.iter()
-    }
-
-    /// Returns the number of entries.
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// Returns `true` if there are no entries.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Removes and returns the value for `key`.
-    pub fn remove(&mut self, key: &str) -> Option<Bytes> {
-        self.0.remove(key)
+    /// Returns an iterator over the name/value pairs in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Bytes)> {
+        self.0.iter().map(|(n, v)| (n.as_str(), v))
     }
 }
 
