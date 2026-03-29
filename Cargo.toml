@@ -46,7 +46,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [lints.clippy]
 allow_attributes_without_reason = "warn"
-expect_used = "deny"
 missing_const_for_fn = "warn"
 mod_module_files = "warn"
 option_if_let_else = "warn"

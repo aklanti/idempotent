@@ -11,6 +11,10 @@ pub enum Error {
     #[error("idempotency key exceeds 255 bytes (got {0})")]
     KeyTooLong(usize),
 
+    /// Invalid idempotency key.
+    #[error("idempotency key contains a control char or a reserved separator (':' or '/')")]
+    InvalidKey,
+
     /// The fencing token is invalid.
     #[error("negative fencing token")]
     NegativeFencingToken,

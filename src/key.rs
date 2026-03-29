@@ -12,6 +12,12 @@ impl IdempotencyKey {
     /// The maximum allowed length of an idempotency key
     const MAX_LEN: usize = u8::MAX as usize;
 
+    /// Prefix / tenancy boundary. Reserved: forbidden in keys and prefixes.
+    const PREFIX_SEPARATOR: char = ':';
+
+    /// Scope boundary (Change 24). Reserved likewise.
+    pub const SCOPE_SEPARATOR: char = '/';
+
     /// Creates a new idempotency key
     ///
     /// # Examples
@@ -26,22 +32,31 @@ impl IdempotencyKey {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(raw: impl Into<String>) -> Result<Self, Error> {
-        let inner = raw.into();
+    pub fn new(value: impl Into<String>) -> Result<Self, Error> {
+        let value = value.into();
 
-        if inner.is_empty() {
+        if value.is_empty() {
             return Err(Error::EmptyKey);
         }
-        if inner.len() > Self::MAX_LEN {
-            return Err(Error::KeyTooLong(inner.len()));
+        if value.len() > Self::MAX_LEN {
+            return Err(Error::KeyTooLong(value.len()));
         }
 
-        Ok(Self(inner))
+        if value.chars().any(Self::is_reserved) {
+            return Err(Error::InvalidKey);
+        }
+
+        Ok(Self(value))
     }
 
     /// Returns a string slice of the idempotency key
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// A char that may not appear in a user-supplied key OR a service-name prefix.
+    pub(crate) const fn is_reserved(c: char) -> bool {
+        c.is_ascii_control() || c == Self::PREFIX_SEPARATOR || c == Self::SCOPE_SEPARATOR
     }
 }
 

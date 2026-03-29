@@ -9,6 +9,9 @@ pub enum ValkeyError {
     /// The stored entry could not be decoded.
     #[error("decode error")]
     Decode(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The key prefix is invalid.
+    #[error("service-name prefix {0:?} contains a reserved separator (':' or '/')")]
+    InvalidPrefix(String),
 }
 
 impl From<RedisError> for ValkeyError {

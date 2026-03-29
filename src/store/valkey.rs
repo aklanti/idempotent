@@ -89,12 +89,12 @@ impl ValkeyStore {
 
     /// Returns a prefixed key.
     fn prefixed_key(&self, key: &IdempotencyKey) -> String {
-        format!("{}__{key}", self.service_name)
+        format!("{}:{key}", self.service_name)
     }
 
     /// Returns the fencing token key name.
     fn counter_key(&self) -> String {
-        format!("{}__idempotent_ft_seq", self.service_name)
+        format!("{}::idempotent_ft_seq", self.service_name)
     }
 
     /// Creates a store from an already-connected manager.
@@ -284,11 +284,12 @@ impl ValkeyStoreBuilder {
 
     /// Resolves the `Client` to a `ConnectionManager` and builds the store.
     pub async fn build(self) -> Result<ValkeyStore, ValkeyError> {
+        let prefix = self.prefix.unwrap_or_default();
+        if prefix.chars().any(IdempotencyKey::is_reserved) {
+            return Err(ValkeyError::InvalidPrefix(prefix));
+        }
         let conn = self.client.get_connection_manager().await?;
-        Ok(ValkeyStore::from_connection_manager(
-            self.prefix.unwrap_or_default(),
-            conn,
-        ))
+        Ok(ValkeyStore::from_connection_manager(prefix, conn))
     }
 }
 
