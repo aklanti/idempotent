@@ -106,9 +106,8 @@ impl IdempotencyStore for MemoryStore {
             key: key.clone(),
             reply,
         };
-        let _ = self.tx.send(action).await;
-        rx.await.expect("a response");
-        Ok(())
+        self.tx.send(action).await.map_err(|_| MemoryStoreError)?;
+        rx.await.map_err(|_| MemoryStoreError)
     }
 
     #[cfg_attr(
