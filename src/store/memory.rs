@@ -17,17 +17,21 @@ use crate::entry::Processing;
 use crate::fencing_token::FencingToken;
 use crate::key::IdempotencyKey;
 
+mod command;
+
+use self::command::Command;
+
 /// An in-memory [`IdempotencyStore`] backed by a `HashMap`.
 ///
 /// Entries are automatically swept at the configured interval.
 pub struct MemoryStore {
-    tx: mpsc::Sender<StoreAction>,
+    tx: mpsc::Sender<Command>,
 }
 
 impl MemoryStore {
     /// Creates a new in-memory store.
     ///
-    /// It spawns spawns a background task for processing store actions and sweeping expired
+    /// It spawns spawns a background task for processing store commands and sweeping expired
     /// entries.
     #[cfg_attr(
         feature = "tracing",
@@ -35,7 +39,7 @@ impl MemoryStore {
     )]
     pub fn new(buffer: usize, sweep_interval: Duration) -> Self {
         let (tx, rx) = mpsc::channel(buffer);
-        let store_state = StoreState::new();
+        let store_state = MemoryStoreActor::new();
         tokio::spawn(store_state.run(rx, sweep_interval));
         Self { tx }
     }
@@ -60,18 +64,23 @@ impl IdempotencyStore for MemoryStore {
         entry: IdempotencyEntry<Processing>,
     ) -> Result<InsertResult, Self::Error> {
         let (reply, rx) = oneshot::channel();
-        let action = StoreAction::TryInsert {
+        let cmd = Command::TryInsert {
             key: key.clone(),
             entry,
             reply,
         };
-        self.tx.send(action).await.map_err(|_| MemoryStoreError)?;
+        self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
         rx.await.map_err(|_| MemoryStoreError)
     }
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStore::complete", skip(self), fields(key  = %key), err(Display))
+        tracing::instrument(
+            name = "MemoryStore::complete",
+            skip(self),
+            fields(key  = %key),
+            err(Display),
+        )
     )]
     async fn complete(
         &self,
@@ -85,14 +94,14 @@ impl IdempotencyStore for MemoryStore {
         let mut entry = entry;
         entry.ttl = completed_ttl;
 
-        let action = StoreAction::Complete {
+        let cmd = Command::Complete {
             key: key.clone(),
             entry,
             fencing_token,
             reply,
         };
 
-        self.tx.send(action).await.map_err(|_| MemoryStoreError)?;
+        self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
         rx.await.map_err(|_| MemoryStoreError)
     }
 
@@ -100,13 +109,18 @@ impl IdempotencyStore for MemoryStore {
         feature = "tracing",
         tracing::instrument(name = "MemoryStore::remove", skip(self), err(Display))
     )]
-    async fn remove(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
+    async fn remove(
+        &self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+    ) -> Result<FencedOutcome, Self::Error> {
         let (reply, rx) = oneshot::channel();
-        let action = StoreAction::Remove {
+        let cmd = Command::Remove {
             key: key.clone(),
+            fencing_token,
             reply,
         };
-        self.tx.send(action).await.map_err(|_| MemoryStoreError)?;
+        self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
         rx.await.map_err(|_| MemoryStoreError)
     }
 
@@ -121,14 +135,14 @@ impl IdempotencyStore for MemoryStore {
         ttl: Duration,
     ) -> Result<FencedOutcome, Self::Error> {
         let (reply, rx) = oneshot::channel();
-        let action = StoreAction::Touch {
+        let cmd = Command::Touch {
             key: key.clone(),
             fencing_token,
             ttl,
             reply,
         };
 
-        self.tx.send(action).await.map_err(|_| MemoryStoreError)?;
+        self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
         rx.await.map_err(|_| MemoryStoreError)
     }
 }
@@ -139,59 +153,60 @@ impl IdempotencyStore for MemoryStore {
 pub struct MemoryStoreError;
 
 #[derive(Debug, Default)]
-struct StoreState {
+struct MemoryStoreActor {
     entries: HashMap<IdempotencyKey, StoreRecord>,
     next_token: u64,
 }
 
-impl StoreState {
+impl MemoryStoreActor {
     fn new() -> Self {
         Self::default()
     }
 }
 
-impl StoreState {
+impl MemoryStoreActor {
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "StoreState::run", skip(self, rx))
+        tracing::instrument(name = "MemoryStoreActor::run", skip(self, rx))
     )]
-    async fn run(mut self, mut rx: mpsc::Receiver<StoreAction>, sweep_interval: Duration) {
+    async fn run(mut self, mut rx: mpsc::Receiver<Command>, sweep_interval: Duration) {
         let mut interval = tokio::time::interval(sweep_interval);
         loop {
             tokio::select! {
-                action = rx.recv() => {
-                    let Some(action) = action else { break };
-                    match action {
-                        StoreAction::TryInsert {
-                         key, entry, reply
+                cmd = rx.recv() => {
+                    let Some(cmd) = cmd else { break };
+                    match cmd {
+                        Command::TryInsert {
+                         key, entry, reply,
                         } => {
                             let _ = reply.send(self.try_insert(key, entry));
                         },
-                        StoreAction::Complete {
+                        Command::Complete {
                             key, entry, fencing_token,
                             reply,
                         } => {
                             let result = self.complete(key, entry, fencing_token);
                             let _ = reply.send(result);
+
                         },
-                        StoreAction::Remove {key, reply} => {
-                            self.remove(&key);
-                            let _ = reply.send(());
+                        Command::Remove {key, reply, fencing_token} => {
+                            let result = self.remove(&key, fencing_token);
+                            let _ = reply.send(result);
                         },
-                        StoreAction::Touch {key, fencing_token, ttl, reply} => {
+                        Command::Touch {key, fencing_token, ttl, reply} => {
                             let result = self.touch(&key, fencing_token, ttl);
                             let _ = reply.send(result);
                         }
-                    }
-                },
-                _ = interval.tick() => self.sweep()
+                  }
+              },
+               _ = interval.tick() => self.sweep()
             }
         }
     }
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "StoreState::try_insert", skip(self), fields(key = %key)),
+        tracing::instrument(name = "MemoryStoreActor::try_insert", skip(self), fields(key = %key)),
     )]
     fn try_insert(
         &mut self,
@@ -217,7 +232,7 @@ impl StoreState {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "StoreState::complete")
+        tracing::instrument(name = "MemoryStoreActor::complete")
     )]
     fn complete(
         &mut self,
@@ -237,24 +252,29 @@ impl StoreState {
                 record.created_at = Instant::now();
                 return FencedOutcome::Applied;
             }
-
             return FencedOutcome::FencingMismatch;
         }
-
         FencedOutcome::KeyExpired
     }
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "StoreState::remove", fields(key = %key)),
+        tracing::instrument(name = "MemoryStoreActor::remove", fields(key = %key)),
     )]
-    fn remove(&mut self, key: &IdempotencyKey) {
-        self.entries.remove(key);
+    fn remove(&mut self, key: &IdempotencyKey, fencing_token: FencingToken) -> FencedOutcome {
+        match self.entries.get(key).filter(|record| !record.is_expired()) {
+            Some(record) if record.fencing_token == fencing_token => {
+                self.entries.remove(key);
+                FencedOutcome::Applied
+            }
+            Some(_) => FencedOutcome::FencingMismatch,
+            None => FencedOutcome::KeyExpired,
+        }
     }
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "StoreState::touch", fields(key = %key)),
+        tracing::instrument(name = "MemoryStoreActor::touch", fields(key = %key)),
     )]
     fn touch(
         &mut self,
@@ -278,7 +298,10 @@ impl StoreState {
         FencedOutcome::KeyExpired
     }
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "StoreState::sweep"))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "MemoryStoreActor::sweep")
+    )]
     fn sweep(&mut self) {
         self.entries.retain(|_, record| !record.is_expired());
     }
@@ -298,36 +321,6 @@ impl StoreRecord {
     fn is_expired(&self) -> bool {
         self.created_at.elapsed() >= self.ttl
     }
-}
-
-/// Message sent to the background store task.
-enum StoreAction {
-    /// Insertion attempt request
-    TryInsert {
-        key: IdempotencyKey,
-        entry: IdempotencyEntry<Processing>,
-        reply: oneshot::Sender<InsertResult>,
-    },
-
-    Complete {
-        key: IdempotencyKey,
-        entry: IdempotencyEntry<Completed>,
-        /// A fencing token from the claimed result
-        fencing_token: FencingToken,
-        reply: oneshot::Sender<FencedOutcome>,
-    },
-
-    Remove {
-        key: IdempotencyKey,
-        reply: oneshot::Sender<()>,
-    },
-
-    Touch {
-        key: IdempotencyKey,
-        fencing_token: FencingToken,
-        ttl: Duration,
-        reply: oneshot::Sender<FencedOutcome>,
-    },
 }
 
 #[cfg(test)]
@@ -353,7 +346,7 @@ mod tests {
 
     #[gtest]
     fn insert_vacant_return_a_claim_with_fencing_token() {
-        let mut store = StoreState::new();
+        let mut store = MemoryStoreActor::new();
         let key = IdempotencyKey::new("chimamanda").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -368,7 +361,7 @@ mod tests {
 
     #[gtest]
     fn insert_existing_processing_returns_existing_processing() {
-        let mut store = StoreState::new();
+        let mut store = MemoryStoreActor::new();
         let key = IdempotencyKey::new("chimamanda").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -386,7 +379,7 @@ mod tests {
     }
     #[gtest]
     fn insert_existing_completed_return_existing_completed() {
-        let mut store = StoreState::default();
+        let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -424,7 +417,7 @@ mod tests {
     }
     #[gtest]
     fn insert_on_expired_key_claims_entry() {
-        let mut store = StoreState::default();
+        let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, Duration::ZERO);
@@ -451,7 +444,7 @@ mod tests {
 
     #[gtest]
     fn complete_with_mismatched_fencing_token_is_noop() {
-        let mut store = StoreState::default();
+        let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -484,7 +477,7 @@ mod tests {
 
     #[gtest]
     fn remove_allows_reinsert() {
-        let mut store = StoreState::default();
+        let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -497,7 +490,11 @@ mod tests {
             })
         );
 
-        store.remove(&key);
+        let InsertResult::Claimed { fencing_token } = first else {
+            panic!("expected fencing token");
+        };
+
+        store.remove(&key, fencing_token);
 
         let entry = IdempotencyEntry::new(fingerprint, TTL);
         let second = store.try_insert(key, entry);
@@ -509,14 +506,7 @@ mod tests {
         );
     }
 
-    #[gtest]
-    fn remove_nonexistent_is_ok() {
-        let mut store = StoreState::default();
-        let key = IdempotencyKey::new("ghost").expect("valid key");
-        store.remove(&key);
-    }
-
-    impl StoreState {
+    impl MemoryStoreActor {
         fn contains(&self, key: &IdempotencyKey) -> bool {
             self.entries.contains_key(key)
         }
@@ -524,7 +514,7 @@ mod tests {
 
     #[gtest]
     fn sweep_removes_expired() {
-        let mut store = StoreState::default();
+        let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, Duration::ZERO);
@@ -545,7 +535,7 @@ mod tests {
 
     #[gtest]
     fn sweep_keeps_live() {
-        let mut store = StoreState::default();
+        let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -691,7 +681,14 @@ mod tests {
             }))
         );
 
-        store.remove(&key).await.expect("entry to be removed");
+        let Ok(InsertResult::Claimed { fencing_token }) = first else {
+            panic!("expected claimed");
+        };
+
+        store
+            .remove(&key, fencing_token)
+            .await
+            .expect("entry to be removed");
 
         let entry = IdempotencyEntry::new(fingerprint, TTL);
         let second = store.try_insert(&key, entry).await;

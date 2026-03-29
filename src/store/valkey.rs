@@ -48,7 +48,13 @@ static COMPLETE_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
     Script::new(code)
 });
 
-/// Lua script for atomic entry.
+/// Lua script for atomic entry removal.
+static REMOVE_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
+    let code = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/valkey/remove.lua"));
+    Script::new(code)
+});
+
+/// Lua script for atomic TTL extension.
 static TOUCH_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
     let code = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/valkey/touch.lua"));
     Script::new(code)
@@ -167,13 +173,20 @@ impl IdempotencyStore for ValkeyStore {
             err(Display),
         )
     )]
-    async fn remove(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
+    async fn remove(
+        &self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+    ) -> Result<FencedOutcome, Self::Error> {
         let prefixed = self.prefixed_key(key);
-        redis::cmd("DEL")
-            .arg(&prefixed)
-            .exec_async(&mut self.conn.clone())
+        let value: i64 = REMOVE_SCRIPT
+            .key(&prefixed)
+            .arg(fencing_token)
+            .invoke_async(&mut self.conn.clone())
             .await?;
-        Ok(())
+
+        FencedOutcome::try_from(value)
+            .map_err(|_| ValkeyError::Decode("invalid return type".into()))
     }
 
     #[cfg_attr(
