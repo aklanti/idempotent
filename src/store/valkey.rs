@@ -7,6 +7,7 @@
 //! (`maxmemory-policy noeviction`) because a silent eviction under memory pressure breaks
 //! the at-most-once guarantee.
 
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use redis::Client;
@@ -33,6 +34,26 @@ use crate::key::IdempotencyKey;
 
 mod claim;
 
+/// Lua script for atomic key claiming. Returns `nil` on success
+/// or the existing entry bytes if the key is already taken.
+static CLAIM_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
+    let code = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/valkey/claim.lua"));
+    Script::new(code)
+});
+
+/// Lua script for atomic entry completion. Verifies the fencing token
+/// and rejects stale completions.
+static COMPLETE_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
+    let code = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/valkey/complete.lua"));
+    Script::new(code)
+});
+
+/// Lua script for atomic entry.
+static TOUCH_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
+    let code = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/valkey/touch.lua"));
+    Script::new(code)
+});
+
 /// An [`IdempotencyStore`] backed by Valkey or Redis.
 ///
 /// See the [module-level documentation](self) for server requirements.
@@ -45,15 +66,6 @@ pub struct ValkeyStore {
 }
 
 impl ValkeyStore {
-    /// Lua script for atomic key claiming. Returns `nil` on success
-    /// or the existing entry bytes if the key is already taken.
-    const CLAIM_SCRIPT: &str = include_str!("valkey/scripts/claim.lua");
-    /// Lua script for atomic entry completion. Verifies the fencing token
-    /// and rejects stale completions.
-    const COMPLETE_SCRIPT: &str = include_str!("valkey/scripts/complete.lua");
-    /// Lua script for atomic entry.
-    const TOUCH_SCRIPT: &str = include_str!("valkey/scripts/touch.lua");
-
     /// Creates a new store instance without key prefix.
     pub async fn new(service_name: &str, client: Client) -> Result<Self, ValkeyError> {
         let conn = client.get_connection_manager().await?;
@@ -98,8 +110,7 @@ impl IdempotencyStore for ValkeyStore {
         let ttl_ms = entry.ttl.as_millis();
         let serialized = wire.to_bytes()?;
 
-        let script = Script::new(Self::CLAIM_SCRIPT);
-        let reply: ClaimReply = script
+        let reply: ClaimReply = CLAIM_SCRIPT
             .key(prefixed_key)
             .key(self.counter_key())
             .arg(serialized)
@@ -135,8 +146,7 @@ impl IdempotencyStore for ValkeyStore {
     ) -> Result<FencedOutcome, Self::Error> {
         let prefixed = self.prefixed_key(key);
         let serialized = WireEntry::from(&entry).to_bytes()?;
-        let script = Script::new(Self::COMPLETE_SCRIPT);
-        let value: i64 = script
+        let value: i64 = COMPLETE_SCRIPT
             .key(&prefixed)
             .arg(serialized)
             .arg(fencing_token)
@@ -183,9 +193,8 @@ impl IdempotencyStore for ValkeyStore {
     ) -> Result<FencedOutcome, Self::Error> {
         let prefixed = self.prefixed_key(key);
         let ttl_ms = ttl.as_millis();
-        let script = Script::new(Self::TOUCH_SCRIPT);
 
-        let value: i64 = script
+        let value: i64 = TOUCH_SCRIPT
             .key(&prefixed)
             .arg(fencing_token)
             .arg(ttl_ms)
