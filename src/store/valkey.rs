@@ -376,17 +376,22 @@ mod tests {
         let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
         let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
         let first = store.try_insert(&key, entry.clone()).await;
-        let InsertResult::Claimed { fencing_token } = first.expect("a result") else {
-            return;
-        };
-        expect_that!(fencing_token.value(), eq(1));
+
+        expect_that!(
+            first,
+            ok(pat!(&InsertResult::Claimed {
+                fencing_token: FencingToken(1)
+            }))
+        );
 
         // let fingerprint = DefaultFingerprintStrategy.compute("/accept", &[]);
         // let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
         let second = store.try_insert(&key, entry.clone()).await;
-        let InsertResult::Claimed { fencing_token } = second.expect("a result") else {
-            return;
-        };
-        expect_that!(fencing_token.value(), eq(2));
+        expect_that!(
+            second,
+            ok(pat!(&InsertResult::Claimed {
+                fencing_token: FencingToken(2)
+            }))
+        );
     }
 }
