@@ -35,7 +35,7 @@ const _: () = {
     }
 };
 
-/// The result when the operation completes.
+/// The outcome of a fencing-guarded store operation.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FencedOutcome {
     /// The operation is complete and the result stored.
@@ -44,6 +44,8 @@ pub enum FencedOutcome {
     FencingMismatch,
     /// The idempotency key has expired.
     KeyExpired,
+    /// The completing request's fingerprint does not match the claimed request.
+    FingerprintMismatch,
 }
 
 impl TryFrom<i64> for FencedOutcome {
@@ -54,6 +56,7 @@ impl TryFrom<i64> for FencedOutcome {
             0 => Self::Applied,
             1 => Self::FencingMismatch,
             2 => Self::KeyExpired,
+            3 => Self::FingerprintMismatch,
             other => {
                 return Err(Error::UnexpectedFencedOutcome(other));
             }
