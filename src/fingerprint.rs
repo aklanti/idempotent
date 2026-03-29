@@ -5,7 +5,7 @@ use xxhash_rust::xxh3;
 /// A hash of the request operation and body.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Fingerprint(pub(crate) u64);
+pub struct Fingerprint(pub(crate) u128);
 
 /// Trait for computing request fingerprints.
 pub trait FingerprintStrategy: Send + Sync + 'static {
@@ -18,8 +18,12 @@ pub struct DefaultFingerprintStrategy;
 
 impl FingerprintStrategy for DefaultFingerprintStrategy {
     fn compute(&self, operation: &str, body: &[u8]) -> Fingerprint {
-        let inner = xxh3::xxh3_64(&[operation.as_bytes(), b":", body].concat());
-        Fingerprint(inner)
+        let mut hasher = xxh3::Xxh3::new();
+
+        hasher.update(&(operation.len() as u64).to_le_bytes());
+        hasher.update(operation.as_bytes());
+        hasher.update(body);
+        Fingerprint(hasher.digest128())
     }
 }
 
