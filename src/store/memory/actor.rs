@@ -67,6 +67,9 @@ impl MemoryStoreActor {
                _ = interval.tick() => self.sweep()
             }
         }
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!("idempotency store background task stopped");
     }
 
     #[cfg_attr(
@@ -122,17 +125,23 @@ impl MemoryStoreActor {
             .entries
             .get_mut(&key)
             .filter(|record| !record.is_expired())
-            && let ExistingEntry::Processing(_) = &record.existing
+            && let ExistingEntry::Processing(processing) = &record.existing
         {
-            if record.fencing_token == fencing_token {
-                record.ttl = entry.ttl;
-                record.existing = ExistingEntry::Completed(entry);
-                record.created_at = Instant::now();
-                return FencedOutcome::Applied;
+            let claimed_fingerprint = processing.fingerprint;
+            if record.fencing_token != fencing_token {
+                #[cfg(feature = "tracing")]
+                tracing::warn!(key = %key, "fencing mismatch: zombie completion rejected");
+                return FencedOutcome::FencingMismatch;
             }
-            #[cfg(feature = "tracing")]
-            tracing::warn!(key = %key, "fencing mismatch: zombie completion rejected");
-            return FencedOutcome::FencingMismatch;
+            if claimed_fingerprint != entry.fingerprint {
+                #[cfg(feature = "tracing")]
+                tracing::warn!(key = %key, "fingerprint mismatch: completion body differs from the claim");
+                return FencedOutcome::FingerprintMismatch;
+            }
+            record.ttl = entry.ttl;
+            record.existing = ExistingEntry::Completed(entry);
+            record.created_at = Instant::now();
+            return FencedOutcome::Applied;
         }
 
         #[cfg(feature = "tracing")]

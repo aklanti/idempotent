@@ -28,7 +28,7 @@ use self::command::Command;
 #[doc(inline)]
 pub use self::error::MemoryStoreError;
 
-/// An in-memory [`IdempotencyStore`] backed by a `HashMap`.
+/// An in-memory [`IdempotencyStore`].
 ///
 /// Entries are automatically swept at the configured interval.
 #[derive(Clone)]
@@ -53,7 +53,13 @@ impl MemoryStore {
             Err(poisoned) => poisoned.into_inner().take(),
         };
         if let Some(handle) = handle {
-            let _ = handle.await; // JoinError here = the task had panicked; best-effort
+            let outcome = handle.await;
+            #[cfg(feature = "tracing")]
+            if let Err(error) = outcome {
+                tracing::error!(%error, "memory store background task panicked");
+            }
+            #[cfg(not(feature = "tracing"))]
+            let _ = outcome;
         }
     }
 
@@ -219,13 +225,18 @@ impl MemoryStoreBuilder {
         self
     }
 
-    /// Spawns the background task on `handle` instead of the ambient runtime.
+    /// Set the runtime handle.
     pub fn runtime(mut self, handle: Handle) -> Self {
         self.runtime = Some(handle);
         self
     }
 
-    /// Builds the store, spawning its background task.
+    /// Builds the store and spawns its background task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buffer or sweep interval is zero, or if no runtime was set and
+    /// none is currently running.
     pub fn try_build(self) -> Result<MemoryStore, MemoryStoreError> {
         if self.buffer == 0 {
             return Err(MemoryStoreError::ZeroBuffer);
