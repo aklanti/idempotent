@@ -217,6 +217,24 @@ impl IdempotencyStore for ValkeyStore {
         FencedOutcome::try_from(value)
             .map_err(|_| ValkeyError::Decode("invalid return type".into()))
     }
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            name = "ValkeyStore::touch",
+            fields(key = %key, prefix = ?self.service_name),
+            skip(self),
+            err(Display),
+        )
+    )]
+    async fn purge(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
+        let key = self.prefixed_key(key);
+        redis::cmd("DEL")
+            .arg(key)
+            .exec_async(&mut self.conn.clone())
+            .await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

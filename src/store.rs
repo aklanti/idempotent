@@ -57,6 +57,9 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         fencing_token: FencingToken,
         ttl: Duration,
     ) -> Result<FencedOutcome, Self::Error>;
+
+    /// Purge key sibling that bypasses the token check.
+    async fn purge(&self, key: &IdempotencyKey) -> Result<(), Self::Error>;
 }
 
 /// The result of [`IdempotencyStore::try_insert`].

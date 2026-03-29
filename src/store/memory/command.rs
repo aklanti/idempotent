@@ -39,4 +39,9 @@ pub enum Command {
         ttl: Duration,
         reply: oneshot::Sender<FencedOutcome>,
     },
+
+    Purge {
+        key: IdempotencyKey,
+        reply: oneshot::Sender<()>,
+    },
 }

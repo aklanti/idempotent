@@ -5,6 +5,7 @@ export RUST_LOG := env("RUST_LOG", "debug")
     just --list
 
 alias t := test
+alias c := clippy
 
 [doc('Build the documentation.')]
 [group('doc')]
