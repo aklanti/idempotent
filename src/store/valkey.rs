@@ -318,8 +318,8 @@ mod tests {
         (store, container)
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn insert_and_claim() {
         let (store, _container) = new_store().await;
         let key = IdempotencyKey::new("sankara").expect("valid key");
@@ -334,8 +334,8 @@ mod tests {
         )
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn complete_and_replay() {
         let (store, _container) = new_store().await;
 
@@ -367,8 +367,8 @@ mod tests {
         expect_that!(response.body, eq(&Bytes::from_static(b"ok")));
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn consecutive_call_generate_consecutive_fencing_token() {
         let (store, _container) = new_store().await;
 
@@ -384,8 +384,9 @@ mod tests {
             }))
         );
 
-        // let fingerprint = DefaultFingerprintStrategy.compute("/accept", &[]);
-        // let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
+        let key = IdempotencyKey::new("soyinka").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/accept", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS));
         let second = store.try_insert(&key, entry.clone()).await;
         expect_that!(
             second,

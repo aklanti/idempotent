@@ -9,6 +9,6 @@ if values[1] then
 end
 
 local ft = redis.call('INCR', KEYS[2])
-redis.call('HSET', KEYS[1], 'data', ARGV[1], 'ft', ft)
+redis.call('HSET', KEYS[1], 'status', 'in_progress', 'data', ARGV[1], 'ft', ft)
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
 return {'created', tostring(ft), ARGV[1]}  -- proceed with handler
