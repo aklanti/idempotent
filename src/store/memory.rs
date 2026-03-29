@@ -52,7 +52,6 @@ impl MemoryStore {
     }
 }
 
-#[async_trait::async_trait]
 impl IdempotencyStore for MemoryStore {
     type Error = MemoryStoreError;
 

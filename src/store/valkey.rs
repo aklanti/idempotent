@@ -116,7 +116,6 @@ impl ValkeyStore {
     }
 }
 
-#[async_trait::async_trait]
 impl IdempotencyStore for ValkeyStore {
     type Error = ValkeyError;
 
