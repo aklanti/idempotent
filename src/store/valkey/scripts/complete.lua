@@ -5,7 +5,7 @@
 
 local current_token = redis.call('HGET', KEYS[1], 'ft')
 if not current_token then
-    return 3
+    return 2
 end
 
 if current_token ~= ARGV[2] then
