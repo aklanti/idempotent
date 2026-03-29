@@ -489,8 +489,8 @@ mod tests {
         expect_that!(second, pat!(InsertResult::Exists(_)));
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn insert_and_claim() {
         let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
         let key = IdempotencyKey::new("wangari").expect("valid key");
@@ -506,8 +506,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn insert_duplicate_exists() {
         let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
         let key = IdempotencyKey::new("wangari").expect("valid key");
@@ -527,8 +527,8 @@ mod tests {
         expect_that!(second, ok(pat!(InsertResult::Exists(_))));
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn complete_and_replay() {
         let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
         let key = IdempotencyKey::new("wangari").expect("valid key");
@@ -561,8 +561,8 @@ mod tests {
         expect_that!(response.body, eq(&Bytes::from_static(b"ok")));
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn complete_wrong_token() {
         let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
         let key = IdempotencyKey::new("wangari").expect("valid key");
@@ -600,8 +600,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn remove_and_reclaim() {
         let store = MemoryStore::new(16, Duration::from_secs(SECONDS));
         let key = IdempotencyKey::new("wangari").expect("valid key");
@@ -628,8 +628,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn concurrent_insert_one_wins() {
         let store = Arc::new(MemoryStore::new(16, Duration::from_secs(SECONDS)));
         let key = IdempotencyKey::new("makeba").expect("valid key");
@@ -661,8 +661,8 @@ mod tests {
         expect_that!(existed, eq(9));
     }
 
-    #[tokio::test]
     #[gtest]
+    #[tokio::test]
     async fn complete_under_contention() {
         let store = Arc::new(MemoryStore::new(16, Duration::from_secs(SECONDS)));
         let key = IdempotencyKey::new("sankara").expect("valid key");
