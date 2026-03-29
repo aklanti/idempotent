@@ -7,6 +7,7 @@
 //! (`maxmemory-policy noeviction`) because a silent eviction under memory pressure breaks
 //! the at-most-once guarantee.
 
+use std::fmt;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -113,6 +114,14 @@ impl ValkeyStore {
             client,
             prefix: None,
         }
+    }
+}
+
+impl fmt::Debug for ValkeyStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ValkeyStore")
+            .field("service_name", &self.service_name)
+            .finish_non_exhaustive()
     }
 }
 

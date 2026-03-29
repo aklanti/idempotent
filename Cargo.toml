@@ -22,7 +22,7 @@ uuid = ["dep:uuid"]
 valkey = ["dep:redis", "dep:postcard", "serde"]
 
 [dependencies]
-bytes = { version = "1", features = ["serde"] }
+bytes = { version = "1" }
 postcard = { version = "1", optional = true, features = ["alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"

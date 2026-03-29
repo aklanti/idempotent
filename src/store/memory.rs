@@ -1,5 +1,6 @@
 //! In-memory idempotency store.
 
+use std::fmt;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -49,6 +50,12 @@ impl MemoryStore {
             buffer: 64,
             sweep_interval: Duration::from_secs(60),
         }
+    }
+}
+
+impl fmt::Debug for MemoryStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryStore").finish_non_exhaustive()
     }
 }
 
