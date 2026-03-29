@@ -31,6 +31,7 @@ impl MemoryStoreActor {
     )]
     pub async fn run(mut self, mut rx: mpsc::Receiver<Command>, sweep_interval: Duration) {
         let mut interval = tokio::time::interval(sweep_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 cmd = rx.recv() => {

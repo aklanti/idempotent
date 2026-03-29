@@ -1,10 +1,14 @@
 //! In-memory idempotency store.
 
 use std::fmt;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use super::IdempotencyStore;
 use super::InsertResult;
@@ -17,31 +21,40 @@ use crate::key::IdempotencyKey;
 
 mod actor;
 mod command;
+mod error;
 
 use self::actor::MemoryStoreActor;
 use self::command::Command;
+#[doc(inline)]
+pub use self::error::MemoryStoreError;
 
 /// An in-memory [`IdempotencyStore`] backed by a `HashMap`.
 ///
 /// Entries are automatically swept at the configured interval.
+#[derive(Clone)]
 pub struct MemoryStore {
     tx: mpsc::Sender<Command>,
+    task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl MemoryStore {
-    /// Creates a new in-memory store.
-    ///
-    /// It spawns spawns a background task for processing store commands and sweeping expired
-    /// entries.
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "MemoryStore::new", level=tracing::Level::DEBUG)
-    )]
-    pub fn new(buffer: usize, sweep_interval: Duration) -> Self {
-        let (tx, rx) = mpsc::channel(buffer);
-        let store_state = MemoryStoreActor::new();
-        tokio::spawn(store_state.run(rx, sweep_interval));
-        Self { tx }
+    /// Returns `true` while the background task is alive and accepting commands.
+    pub fn is_healthy(&self) -> bool {
+        !self.tx.is_closed()
+    }
+
+    /// Drops this handle's sender and awaits task exit. The task exits when the
+    /// LAST sender drops.
+    pub async fn close(self) {
+        let Self { tx, task } = self;
+        drop(tx);
+        let handle = match task.lock() {
+            Ok(mut slot) => slot.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(handle) = handle {
+            let _ = handle.await; // JoinError here = the task had panicked; best-effort
+        }
     }
 
     /// Starts building a store with default settings
@@ -49,6 +62,7 @@ impl MemoryStore {
         MemoryStoreBuilder {
             buffer: 64,
             sweep_interval: Duration::from_secs(60),
+            runtime: None,
         }
     }
 }
@@ -82,8 +96,11 @@ impl IdempotencyStore for MemoryStore {
             entry,
             reply,
         };
-        self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
-        rx.await.map_err(|_| MemoryStoreError)
+        self.tx
+            .send(cmd)
+            .await
+            .map_err(|_| MemoryStoreError::TaskStopped)?;
+        rx.await.map_err(|_| MemoryStoreError::TaskStopped)
     }
 
     #[cfg_attr(
@@ -114,8 +131,11 @@ impl IdempotencyStore for MemoryStore {
             reply,
         };
 
-        self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
-        rx.await.map_err(|_| MemoryStoreError)
+        self.tx
+            .send(cmd)
+            .await
+            .map_err(|_| MemoryStoreError::TaskStopped)?;
+        rx.await.map_err(|_| MemoryStoreError::TaskStopped)
     }
 
     #[cfg_attr(
@@ -133,8 +153,11 @@ impl IdempotencyStore for MemoryStore {
             fencing_token,
             reply,
         };
-        self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
-        rx.await.map_err(|_| MemoryStoreError)
+        self.tx
+            .send(cmd)
+            .await
+            .map_err(|_| MemoryStoreError::TaskStopped)?;
+        rx.await.map_err(|_| MemoryStoreError::TaskStopped)
     }
 
     #[cfg_attr(
@@ -155,8 +178,11 @@ impl IdempotencyStore for MemoryStore {
             reply,
         };
 
-        self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
-        rx.await.map_err(|_| MemoryStoreError)
+        self.tx
+            .send(cmd)
+            .await
+            .map_err(|_| MemoryStoreError::TaskStopped)?;
+        rx.await.map_err(|_| MemoryStoreError::TaskStopped)
     }
 
     async fn purge(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
@@ -165,8 +191,11 @@ impl IdempotencyStore for MemoryStore {
             key: key.clone(),
             reply,
         };
-        self.tx.send(cmd).await.map_err(|_| MemoryStoreError)?;
-        rx.await.map_err(|_| MemoryStoreError)
+        self.tx
+            .send(cmd)
+            .await
+            .map_err(|_| MemoryStoreError::TaskStopped)?;
+        rx.await.map_err(|_| MemoryStoreError::TaskStopped)
     }
 }
 
@@ -174,6 +203,7 @@ impl IdempotencyStore for MemoryStore {
 pub struct MemoryStoreBuilder {
     buffer: usize,
     sweep_interval: Duration,
+    runtime: Option<Handle>,
 }
 
 impl MemoryStoreBuilder {
@@ -189,16 +219,32 @@ impl MemoryStoreBuilder {
         self
     }
 
+    /// Spawns the background task on `handle` instead of the ambient runtime.
+    pub fn runtime(mut self, handle: Handle) -> Self {
+        self.runtime = Some(handle);
+        self
+    }
+
     /// Builds the store, spawning its background task.
-    pub fn build(self) -> MemoryStore {
-        MemoryStore::new(self.buffer, self.sweep_interval)
+    pub fn try_build(self) -> Result<MemoryStore, MemoryStoreError> {
+        if self.buffer == 0 {
+            return Err(MemoryStoreError::ZeroBuffer);
+        }
+        if self.sweep_interval.is_zero() {
+            return Err(MemoryStoreError::ZeroSweepInterval);
+        }
+        let handle = match self.runtime {
+            Some(handle) => handle,
+            None => Handle::try_current().map_err(|_| MemoryStoreError::NoRuntime)?,
+        };
+        let (tx, rx) = mpsc::channel(self.buffer);
+        let task = handle.spawn(MemoryStoreActor::new().run(rx, self.sweep_interval));
+        Ok(MemoryStore {
+            tx,
+            task: Arc::new(Mutex::new(Some(task))),
+        })
     }
 }
-
-/// The error type for the operations on memory store.
-#[derive(Debug, thiserror::Error)]
-#[error("memory store task stopped")]
-pub struct MemoryStoreError;
 
 #[cfg(test)]
 mod tests {
@@ -429,7 +475,11 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn insert_and_claim() {
-        let store = MemoryStore::new(16, TTL);
+        let store = MemoryStore::builder()
+            .buffer(16)
+            .sweep_interval(TTL)
+            .try_build()
+            .expect("build memory store");
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -446,7 +496,11 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn insert_duplicate_exists() {
-        let store = MemoryStore::new(16, TTL);
+        let store = MemoryStore::builder()
+            .buffer(16)
+            .sweep_interval(TTL)
+            .try_build()
+            .expect("build memory store");
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -467,7 +521,11 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn complete_and_replay() {
-        let store = MemoryStore::new(16, TTL);
+        let store = MemoryStore::builder()
+            .buffer(16)
+            .sweep_interval(TTL)
+            .try_build()
+            .expect("build memory store");
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -501,7 +559,11 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn complete_wrong_token() {
-        let store = MemoryStore::new(16, TTL);
+        let store = MemoryStore::builder()
+            .buffer(16)
+            .sweep_interval(TTL)
+            .try_build()
+            .expect("build memory store");
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -539,7 +601,11 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn remove_and_reclaim() {
-        let store = MemoryStore::new(16, TTL);
+        let store = MemoryStore::builder()
+            .buffer(16)
+            .sweep_interval(TTL)
+            .try_build()
+            .expect("build memory store");
         let key = IdempotencyKey::new("wangari").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
@@ -574,7 +640,13 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn concurrent_insert_one_wins() {
-        let store = Arc::new(MemoryStore::new(16, TTL));
+        let store = Arc::new(
+            MemoryStore::builder()
+                .buffer(16)
+                .sweep_interval(TTL)
+                .try_build()
+                .expect("build memory store"),
+        );
         let key = IdempotencyKey::new("makeba").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/force", &[]);
 
@@ -607,7 +679,13 @@ mod tests {
     #[gtest]
     #[tokio::test]
     async fn complete_under_contention() {
-        let store = Arc::new(MemoryStore::new(16, TTL));
+        let store = Arc::new(
+            MemoryStore::builder()
+                .buffer(16)
+                .sweep_interval(TTL)
+                .try_build()
+                .expect("build memory store"),
+        );
         let key = IdempotencyKey::new("sankara").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/one-africa", &[]);
         let response = CachedResponse {

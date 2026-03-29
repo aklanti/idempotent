@@ -1,6 +1,7 @@
 use redis::RedisError;
 
 /// Errors returned by [`ValkeyStore`] operations.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ValkeyError {
     /// A connection or network error.
