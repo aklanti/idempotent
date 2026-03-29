@@ -187,8 +187,12 @@ pub trait EntryState: sealed::Sealed {}
 mod tests {
     use std::time::Duration;
 
-    use googletest::matchers::{eq, not, pat};
-    use googletest::{assert_that, expect_that, gtest};
+    use googletest::assert_that;
+    use googletest::expect_that;
+    use googletest::gtest;
+    use googletest::matchers::eq;
+    use googletest::matchers::not;
+    use googletest::matchers::pat;
 
     use super::*;
 

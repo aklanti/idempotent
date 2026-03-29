@@ -19,10 +19,10 @@ impl IdempotencyKey {
     /// ```
     /// # use idempotent::IdempotencyKey;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let key = IdempotencyKey::new("xxxx")?;
-    ///     assert_eq!(key.as_str(), "xxxx");
-    ///     let result =  IdempotencyKey::new("x".repeat(256));
-    ///     assert!(result.is_err());
+    /// let key = IdempotencyKey::new("xxxx")?;
+    /// assert_eq!(key.as_str(), "xxxx");
+    /// let result = IdempotencyKey::new("x".repeat(256));
+    /// assert!(result.is_err());
     ///     # Ok(())
     /// # }
     /// ```
@@ -60,8 +60,12 @@ impl Default for IdempotencyKey {
 
 #[cfg(test)]
 mod tests {
-    use googletest::matchers::{anything, err, ok, pat};
-    use googletest::{expect_that, gtest};
+    use googletest::expect_that;
+    use googletest::gtest;
+    use googletest::matchers::anything;
+    use googletest::matchers::err;
+    use googletest::matchers::ok;
+    use googletest::matchers::pat;
 
     use super::*;
 

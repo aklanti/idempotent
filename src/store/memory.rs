@@ -2,12 +2,19 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
-use super::{IdempotencyStore, InsertResult};
-use crate::entry::{Completed, ExistingEntry, FencingToken, IdempotencyEntry, Processing};
+use super::IdempotencyStore;
+use super::InsertResult;
+use crate::entry::Completed;
+use crate::entry::ExistingEntry;
+use crate::entry::FencingToken;
+use crate::entry::IdempotencyEntry;
+use crate::entry::Processing;
 use crate::key::IdempotencyKey;
 
 /// An in-memory [`IdempotencyStore`] backed by a `HashMap`.
@@ -232,12 +239,19 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use googletest::matchers::{anything, eq, ok, pat};
-    use googletest::{expect_that, gtest};
+    use googletest::expect_that;
+    use googletest::gtest;
+    use googletest::matchers::anything;
+    use googletest::matchers::eq;
+    use googletest::matchers::ok;
+    use googletest::matchers::pat;
 
     use super::*;
-    use crate::entry::{CachedResponse, ExistingEntry, Metadata};
-    use crate::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
+    use crate::entry::CachedResponse;
+    use crate::entry::ExistingEntry;
+    use crate::entry::Metadata;
+    use crate::fingerprint::DefaultFingerprintStrategy;
+    use crate::fingerprint::FingerprintStrategy;
 
     const SECONDS: u64 = 60;
 

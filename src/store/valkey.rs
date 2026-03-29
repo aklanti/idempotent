@@ -10,14 +10,23 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
+use redis::Client;
+use redis::RedisError;
+use redis::RedisWrite;
+use redis::Script;
+use redis::ToRedisArgs;
 use redis::aio::ConnectionManager;
-use redis::{Client, RedisError, RedisWrite, Script, ToRedisArgs};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use super::{IdempotencyStore, InsertResult};
-use crate::entry::{
-    CachedResponse, Completed, ExistingEntry, FencingToken, IdempotencyEntry, Processing,
-};
+use super::IdempotencyStore;
+use super::InsertResult;
+use crate::entry::CachedResponse;
+use crate::entry::Completed;
+use crate::entry::ExistingEntry;
+use crate::entry::FencingToken;
+use crate::entry::IdempotencyEntry;
+use crate::entry::Processing;
 use crate::fingerprint::Fingerprint;
 use crate::key::IdempotencyKey;
 
@@ -287,14 +296,20 @@ impl ToRedisArgs for FencingToken {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use googletest::matchers::{anything, eq, ok, pat};
-    use googletest::{expect_that, gtest};
+    use googletest::expect_that;
+    use googletest::gtest;
+    use googletest::matchers::anything;
+    use googletest::matchers::eq;
+    use googletest::matchers::ok;
+    use googletest::matchers::pat;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::valkey::Valkey;
 
     use super::*;
-    use crate::entry::{CachedResponse, Metadata};
-    use crate::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
+    use crate::entry::CachedResponse;
+    use crate::entry::Metadata;
+    use crate::fingerprint::DefaultFingerprintStrategy;
+    use crate::fingerprint::FingerprintStrategy;
 
     const SECONDS: u64 = 60;
 

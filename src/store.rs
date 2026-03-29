@@ -5,7 +5,11 @@ pub mod memory;
 #[cfg(feature = "valkey")]
 pub mod valkey;
 
-use crate::entry::{Completed, ExistingEntry, FencingToken, IdempotencyEntry, Processing};
+use crate::entry::Completed;
+use crate::entry::ExistingEntry;
+use crate::entry::FencingToken;
+use crate::entry::IdempotencyEntry;
+use crate::entry::Processing;
 use crate::key::IdempotencyKey;
 
 /// Trait for idempotency entry storage backends.

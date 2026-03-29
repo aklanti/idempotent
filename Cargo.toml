@@ -6,7 +6,7 @@ authors = ["Sede Soukossi"]
 description = "Type-safe idempotency keys for building reliable, retry-safe APIs"
 license = "MPL-2.0"
 repository = "https://github.com/aklanti/idempotent"
-rust-version = "1.94.0"
+rust-version = "1.96.0"
 keywords = ["idempotency", "idempotent", "api", "retry", "deduplication"]
 categories = ["web-programming", "data-structures"]
 
@@ -43,8 +43,8 @@ optional = true
 [dev-dependencies]
 googletest = { version = "0.14", features = ["proptest"] }
 proptest = "1.10"
-testcontainers = "0.27.1"
-testcontainers-modules = { version = "0.15.0", features = ["valkey"] }
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["valkey"] }
 
 [lints.clippy]
 allow_attributes_without_reason = "warn"

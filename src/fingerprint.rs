@@ -25,10 +25,14 @@ impl FingerprintStrategy for DefaultFingerprintStrategy {
 
 #[cfg(test)]
 mod tests {
-    use googletest::matchers::{eq, not};
-    use googletest::{expect_that, gtest};
+    use googletest::expect_that;
+    use googletest::gtest;
+    use googletest::matchers::eq;
+    use googletest::matchers::not;
+    use proptest::arbitrary;
+    use proptest::collection;
+    use proptest::proptest;
     use proptest::strategy::Strategy;
-    use proptest::{arbitrary, collection, proptest};
 
     use super::*;
 
