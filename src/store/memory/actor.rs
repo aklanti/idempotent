@@ -86,7 +86,7 @@ impl MemoryStoreActor {
         }
 
         #[cfg(feature = "tracing")]
-        if self.contains(&key) {
+        if self.entries.contains_key(&key) {
             tracing::info!(key = %key, "reclaimed expired key");
         }
 
@@ -197,11 +197,15 @@ impl MemoryStoreActor {
         tracing::instrument(name = "MemoryStoreActor::sweep", skip_all)
     )]
     pub fn sweep(&mut self) {
+        #[cfg(feature = "tracing")]
         let before = self.entries.len();
         self.entries.retain(|_, record| !record.is_expired());
-        let removed = before - self.entries.len();
         #[cfg(feature = "tracing")]
-        tracing::debug!(removed, remaining = self.entries.len(), "sweep complete");
+        tracing::debug!(
+            removed = before - self.entries.len(),
+            remaining = self.entries.len(),
+            "sweep complete"
+        );
     }
 
     #[cfg_attr(
@@ -214,6 +218,7 @@ impl MemoryStoreActor {
         self.entries.remove(key);
     }
 
+    #[cfg(test)]
     pub fn contains(&self, key: &IdempotencyKey) -> bool {
         self.entries.contains_key(key)
     }
