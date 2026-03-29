@@ -142,8 +142,8 @@ impl StoreState {
                             key, entry, fencing_token,
                             reply,
                         } => {
-                            self.complete(key, entry, fencing_token);
-                            let _ = reply.send(());
+                            let result = self.complete(key, entry, fencing_token);
+                            let _ = reply.send(result);
                         },
                         StoreAction::Remove {key, reply} => {
                             self.remove(&key);
@@ -247,7 +247,7 @@ enum StoreAction {
         entry: IdempotencyEntry<Completed>,
         /// A fencing token from the claimed result
         fencing_token: FencingToken,
-        reply: oneshot::Sender<()>,
+        reply: oneshot::Sender<CompleteResult>,
     },
     Remove {
         key: IdempotencyKey,
