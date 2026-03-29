@@ -26,10 +26,14 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     /// The error type returned by store operations.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Attempt to claim an idempotency key
+    /// Attempts to claim an idempotency key.
     ///
-    /// It returns [`InsertResult::Claimed`] if claimed, or [`InsertResult::Exists`]
-    /// if the key already exists
+    /// Returns [`InsertResult::Claimed`] when the key was free, or [`InsertResult::Exists`]
+    /// with the existing entry when it was already taken.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store operation fails.
     fn try_insert(
         &self,
         key: &IdempotencyKey,
@@ -48,7 +52,14 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         ClaimBuilder::new(self, key, processing_ttl)
     }
 
-    /// Creates a builder for an owned claim.
+    /// Attempts to claim `key`, returning an owned outcome.
+    ///
+    /// On success the [`OwnedClaimGuard`] can move across await points and tasks; if it is
+    /// dropped before completion it frees the claim so a retry can re-run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store operation fails.
     fn claim_owned(
         &self,
         key: IdempotencyKey,
@@ -59,9 +70,9 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     {
         async move {
             let fingerprint = entry.fingerprint;
-            let value = match self.try_insert(&key, entry).await? {
+            let value = match self.try_insert(&key, entry.clone()).await? {
                 InsertResult::Claimed { fencing_token } => {
-                    let guard = OwnedClaimGuard::new(self.clone(), key, fencing_token);
+                    let guard = OwnedClaimGuard::new(self.clone(), key, fencing_token, entry);
                     OwnedClaimOutcome::Claimed(guard)
                 }
                 InsertResult::Exists(existing) => OwnedClaimOutcome::Exists {
@@ -72,9 +83,14 @@ pub trait IdempotencyStore: Send + Sync + 'static {
             Ok(value)
         }
     }
-    /// Marks a claimed key as completed with a cached response.
+    /// Marks a claimed key as completed and caches its response.
     ///
-    /// The fencing token must match the one returned by [`Self::try_insert`].
+    /// The fencing token must match the one returned by [`Self::try_insert`]; the returned
+    /// [`FencedOutcome`] reports whether the write applied or was fenced out.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store operation fails.
     fn complete(
         &self,
         key: &IdempotencyKey,
@@ -83,15 +99,22 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         completed_ttl: Duration,
     ) -> impl Future<Output = Result<FencedOutcome, Self::Error>> + Send;
 
-    /// Removes an idempotency entry
+    /// Removes an idempotency entry if the fencing token still owns the claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store operation fails.
     fn remove(
         &self,
         key: &IdempotencyKey,
         fencing_token: FencingToken,
     ) -> impl Future<Output = Result<FencedOutcome, Self::Error>> + Send;
 
-    /// Extends the processing lease for an idempotency key by the given `ttl`
-    /// if the fencing token still matches the claim.
+    /// Extends the processing lease on a key by `ttl` while the fencing token matches the claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store operation fails.
     fn touch(
         &self,
         key: &IdempotencyKey,
@@ -99,7 +122,11 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         ttl: Duration,
     ) -> impl Future<Output = Result<FencedOutcome, Self::Error>> + Send;
 
-    /// Purge key sibling that bypasses the token check.
+    /// Removes a key unconditionally, bypassing the fencing-token check.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store operation fails.
     fn purge(&self, key: &IdempotencyKey) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
@@ -118,20 +145,19 @@ pub enum InsertResult {
     Exists(ExistingEntry),
 }
 
-/// Type-erased boxed error.
+/// The boxed error type returned by [`DynIdempotencyStore`].
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Object-safe, `dyn`-compatible mirror of [`IdempotencyStore`].
 pub trait DynIdempotencyStore: Send + Sync + 'static {
-    /// Claims `key`. Erased form of [`IdempotencyStore::try_insert`]
+    /// Claims `key`.
     fn try_insert<'a>(
         &'a self,
         key: &'a IdempotencyKey,
         entry: IdempotencyEntry<Processing>,
     ) -> Pin<Box<dyn Future<Output = Result<InsertResult, BoxError>> + Send + 'a>>;
 
-    /// Marks a claimed `key` completed with its cached response. Erased form of
-    /// [`IdempotencyStore::complete`].
+    /// Marks a claimed `key` completed with its cached response.
     fn complete<'a>(
         &'a self,
         key: &'a IdempotencyKey,
@@ -140,8 +166,7 @@ pub trait DynIdempotencyStore: Send + Sync + 'static {
         completed_ttl: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<FencedOutcome, BoxError>> + Send + 'a>>;
 
-    /// Frees `key` if `fencing_token` still owns the claim. Erased form of
-    /// [`IdempotencyStore::remove`]
+    /// Frees `key` if `fencing_token` still owns the claim.
     fn remove<'a>(
         &'a self,
         key: &'a IdempotencyKey,
@@ -149,7 +174,7 @@ pub trait DynIdempotencyStore: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<FencedOutcome, BoxError>> + Send + 'a>>;
 
     /// Extends the processing lease on `key` by `ttl` while `fencing_token` still matches the
-    /// claim. Erased form of [`IdempotencyStore::touch`].
+    /// claim.
     fn touch<'a>(
         &'a self,
         key: &'a IdempotencyKey,
@@ -158,7 +183,6 @@ pub trait DynIdempotencyStore: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<FencedOutcome, BoxError>> + Send + 'a>>;
 
     /// Deletes `key` unconditionally, bypassing the fencing-token check.
-    /// Erased form of [`IdempotencyStore::purge`].
     fn purge<'a>(
         &'a self,
         key: &'a IdempotencyKey,
