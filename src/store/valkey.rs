@@ -125,25 +125,19 @@ impl IdempotencyStore for ValkeyStore {
         let ttl_ms = entry.ttl.as_millis();
         let serialized = WireEntry::from(&entry).to_bytes()?;
         let script = Script::new(Self::COMPLETE_SCRIPT);
-        match script
+        let value: i64 = script
             .key(&prefixed)
             .arg(serialized)
             .arg(fencing_token)
             .arg(ttl_ms)
-            .invoke_async::<()>(&mut self.conn.clone())
-            .await
-        {
-            Ok(_) => Ok(CompleteResult::Stored),
-            Err(err) => {
-                let msg = err.to_string();
-                if msg.contains("KEY_MISSING") {
-                    return Ok(CompleteResult::KeyExpired);
-                } else if msg.contains("FENCING_MISMATCH") {
-                    Ok(CompleteResult::FencingMismatch)
-                } else {
-                    return Err(ValkeyError::Connection(Box::new(err)));
-                }
-            }
+            .invoke_async(&mut self.conn.clone())
+            .await?;
+
+        match value {
+            0 => Ok(CompleteResult::Stored),
+            1 => Ok(CompleteResult::FencingMismatch),
+            2 => Ok(CompleteResult::KeyExpired),
+            _ => return Err(ValkeyError::Decode("invalid return type".into())),
         }
     }
 
