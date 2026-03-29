@@ -4,7 +4,7 @@
 -- ARGV[2] = ttl_ms
 
 local values = redis.call('HMGET', KEYS[1], 'status', 'ft', 'data')
-if values[1] then
+if values[3] then
     return {values[1], values[2], values[3]}  -- caller inspects status and fingerprint
 end
 
