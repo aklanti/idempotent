@@ -1,13 +1,12 @@
 //! Valkey / Redis idempotency store.
 //!
 //! Claiming and completing are atomic via Lua scripts with no TOCTOU risk.
-//! Expiration uses native key TTL.
+//! The key-expiration uses native key TTL.
 //!
-//! The server must have AOF persistence enabled (`appendonly yes`) and
-//! eviction disabled (`maxmemory-policy noeviction`). Silent eviction under
-//! memory pressure breaks the at-most-once guarantee.
+//! The server must have AOF persistence enabled (`appendonly yes`) and eviction disabled
+//! (`maxmemory-policy noeviction`) because a silent eviction under memory pressure breaks
+//! the at-most-once guarantee.
 
-use std::borrow::Cow;
 use std::time::Duration;
 
 use redis::Client;
@@ -19,24 +18,29 @@ use redis::aio::ConnectionManager;
 use serde::Deserialize;
 use serde::Serialize;
 
-use super::IdempotencyStore;
-use super::InsertResult;
+use self::claim::ClaimReply;
+use crate::IdempotencyStore;
+use crate::InsertResult;
 use crate::entry::CachedResponse;
 use crate::entry::Completed;
 use crate::entry::ExistingEntry;
-use crate::entry::FencingToken;
 use crate::entry::IdempotencyEntry;
 use crate::entry::Processing;
+use crate::fencing_token::FencingToken;
 use crate::fingerprint::Fingerprint;
 use crate::key::IdempotencyKey;
+
+mod claim;
 
 /// An [`IdempotencyStore`] backed by Valkey or Redis.
 ///
 /// See the [module-level documentation](self) for server requirements.
 pub struct ValkeyStore {
+    /// The service or application name used as fencing token.
+    pub service_name: String,
+
+    /// The store connection manager.
     conn: ConnectionManager,
-    /// Optional key prefix for multi-tenant deployments.
-    pub key_prefix: Option<String>,
 }
 
 impl ValkeyStore {
@@ -47,31 +51,25 @@ impl ValkeyStore {
     /// and rejects stale completions.
     const COMPLETE_SCRIPT: &str = include_str!("valkey/scripts/complete.lua");
 
-    /// Creates a new store instance without key prefix
-    pub async fn new(client: Client) -> Result<Self, ValkeyError> {
-        Self::with_prefix(client, None).await
-    }
-
-    /// Creates a new `ValkeyStore` with an optional key prefix.
-    pub async fn with_prefix(
-        client: Client,
-        key_prefix: Option<&str>,
-    ) -> Result<Self, ValkeyError> {
+    /// Creates a new store instance without key prefix.
+    pub async fn new(service_name: &str, client: Client) -> Result<Self, ValkeyError> {
         let conn = client.get_connection_manager().await?;
         let store = Self {
+            service_name: service_name.to_owned(),
             conn,
-            key_prefix: key_prefix.map(ToOwned::to_owned),
         };
 
         Ok(store)
     }
 
-    /// Returns a prefixed key
-    fn prefixed_key<'a>(&'a self, key: &'a IdempotencyKey) -> Cow<'a, str> {
-        self.key_prefix.as_ref().map_or_else(
-            || Cow::Borrowed(key.as_str()),
-            |prefix| Cow::Owned(format!("{prefix}-{key}")),
-        )
+    /// Returns a prefixed key.
+    fn prefixed_key(&self, key: &IdempotencyKey) -> String {
+        format!("{}__{key}", self.service_name)
+    }
+
+    /// Returns the fencing token key name.
+    fn counter_key(&self) -> String {
+        format!("{}__idempotent_ft_seq", self.service_name)
     }
 }
 
@@ -88,24 +86,23 @@ impl IdempotencyStore for ValkeyStore {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Processing>,
     ) -> Result<InsertResult, Self::Error> {
-        let fencing_token = entry.fencing_token();
-        let prefixed = self.prefixed_key(key);
+        let prefixed_key = self.prefixed_key(key);
         let wire = WireEntry::from(&entry);
         let ttl_ms = entry.ttl.as_millis();
         let serialized = wire.to_bytes()?;
 
         let script = Script::new(Self::CLAIM_SCRIPT);
-        let result: Option<Vec<u8>> = script
-            .key(prefixed)
+        let reply: ClaimReply = script
+            .key(prefixed_key)
+            .key(self.counter_key())
             .arg(serialized)
-            .arg(fencing_token)
             .arg(ttl_ms)
             .invoke_async(&mut self.conn.clone())
             .await?;
 
-        match result {
-            None => Ok(InsertResult::Claimed { fencing_token }),
-            Some(data) => {
+        match reply {
+            ClaimReply::Created { fencing_token } => Ok(InsertResult::Claimed { fencing_token }),
+            ClaimReply::InProgress { data } | ClaimReply::Complete { data } => {
                 let wire = WireEntry::try_from(data.as_slice())?;
                 let existing = ExistingEntry::try_from(wire)?;
                 Ok(InsertResult::Exists(existing))
@@ -155,7 +152,6 @@ impl IdempotencyStore for ValkeyStore {
 struct WireEntry {
     status: WireStatus,
     fingerprint: Fingerprint,
-    fencing_token: Option<FencingToken>,
     ttl: Duration,
     response: Option<CachedResponse>,
 }
@@ -176,7 +172,6 @@ impl From<&IdempotencyEntry<Processing>> for WireEntry {
         Self {
             status: WireStatus::Processing,
             fingerprint: entry.fingerprint,
-            fencing_token: Some(entry.fencing_token()),
             response: None,
             ttl: entry.ttl,
         }
@@ -188,7 +183,6 @@ impl From<&IdempotencyEntry<Completed>> for WireEntry {
         Self {
             status: WireStatus::Complete,
             fingerprint: entry.fingerprint,
-            fencing_token: None,
             response: Some(entry.response().clone()),
             ttl: entry.ttl,
         }
@@ -226,19 +220,16 @@ impl TryFrom<WireEntry> for ExistingEntry {
         tracing::instrument(name = "ExistingEntry::try_from", err(Debug))
     )]
     fn try_from(wire: WireEntry) -> Result<Self, ValkeyError> {
-        let fingerprint = wire.fingerprint;
-        let ttl = wire.ttl;
-
         match wire.status {
             WireStatus::Processing => {
-                let entry = IdempotencyEntry::new(fingerprint, ttl);
+                let entry = IdempotencyEntry::new(wire.fingerprint, wire.ttl);
                 Ok(ExistingEntry::Processing(entry))
             }
             WireStatus::Complete => {
                 let response = wire.response.ok_or_else(|| {
                     ValkeyError::Decode("completed entry missing response".into())
                 })?;
-                let entry = IdempotencyEntry::new(fingerprint, ttl).complete(response);
+                let entry = IdempotencyEntry::new(wire.fingerprint, wire.ttl).complete(response);
                 Ok(ExistingEntry::Completed(entry))
             }
         }
@@ -249,7 +240,6 @@ impl TryFrom<WireEntry> for ExistingEntry {
 ///
 /// It maps the idempotency entry typestate variants reconstructed in [`ExistingEntry`]
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-#[repr(u8)]
 enum WireStatus {
     Complete,
     Processing,
@@ -275,6 +265,7 @@ pub enum ValkeyError {
     #[error("decode error")]
     Decode(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
+
 impl From<RedisError> for ValkeyError {
     fn from(error: RedisError) -> Self {
         Self::Connection(Box::new(error))
@@ -321,7 +312,9 @@ mod tests {
             .expect("to get container port");
         let client =
             redis::Client::open(format!("redis://127.0.0.1:{port}")).expect("to connect to Valkey");
-        let store = ValkeyStore::new(client).await.expect("to create a store");
+        let store = ValkeyStore::new("test", client)
+            .await
+            .expect("to create a store");
         (store, container)
     }
 

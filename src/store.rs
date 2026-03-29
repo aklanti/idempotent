@@ -7,9 +7,9 @@ pub mod valkey;
 
 use crate::entry::Completed;
 use crate::entry::ExistingEntry;
-use crate::entry::FencingToken;
 use crate::entry::IdempotencyEntry;
 use crate::entry::Processing;
+use crate::fencing_token::FencingToken;
 use crate::key::IdempotencyKey;
 
 /// Trait for idempotency entry storage backends.
@@ -45,12 +45,12 @@ pub trait IdempotencyStore: Send + Sync + 'static {
 /// The result of [`IdempotencyStore::try_insert`].
 #[derive(Debug, Clone)]
 pub enum InsertResult {
-    /// A key is successfully claimed
+    /// A key is successfully claimed.
     ///
     /// The key was absent or expired and the caller owns the claim and should
-    /// execute the handler
+    /// execute the handler.
     Claimed {
-        /// A fencing token to prevent zombie completion
+        /// A fencing token to prevent zombie completion.
         fencing_token: FencingToken,
     },
     /// A key already exists

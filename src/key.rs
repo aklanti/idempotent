@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::error::IdempotencyError;
+use crate::Error;
 
 /// A validated idempotency key extracted from a request metadata
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -23,17 +23,17 @@ impl IdempotencyKey {
     /// assert_eq!(key.as_str(), "xxxx");
     /// let result = IdempotencyKey::new("x".repeat(256));
     /// assert!(result.is_err());
-    ///     # Ok(())
+    /// # Ok(())
     /// # }
     /// ```
-    pub fn new(raw: impl Into<String>) -> Result<Self, IdempotencyError> {
+    pub fn new(raw: impl Into<String>) -> Result<Self, Error> {
         let inner = raw.into();
 
         if inner.is_empty() {
-            return Err(IdempotencyError::EmptyKey);
+            return Err(Error::EmptyKey);
         }
         if inner.len() > Self::MAX_LEN {
-            return Err(IdempotencyError::KeyTooLong(inner.len()));
+            return Err(Error::KeyTooLong(inner.len()));
         }
 
         Ok(Self(inner))
@@ -72,13 +72,13 @@ mod tests {
     #[gtest]
     fn empty_key_is_rejected() {
         let result = IdempotencyKey::new("");
-        expect_that!(result, err(pat!(IdempotencyError::EmptyKey)));
+        expect_that!(result, err(pat!(Error::EmptyKey)));
     }
 
     #[gtest]
     fn key_exceeding_max_len_rejected() {
         let result = IdempotencyKey::new("x".repeat(u16::MAX as usize));
-        expect_that!(result, err(pat!(IdempotencyError::KeyTooLong(anything()))));
+        expect_that!(result, err(pat!(Error::KeyTooLong(anything()))));
     }
 
     #[cfg(feature = "uuid")]

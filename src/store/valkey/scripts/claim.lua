@@ -1,13 +1,14 @@
 -- KEYS[1] = idempotency key
+-- KEY[2] = counter key
 -- ARGV[1] = serialized Processing entry
--- ARGV[2] = fencing_token
--- ARGV[3] = ttl_ms
+-- ARGV[2] = ttl_ms
 
-local existing = redis.call('HGET', KEYS[1], 'data')
-if existing then
-    return existing  -- caller inspects status and fingerprint
+local values = redis.call('HMGET', KEYS[1], 'status', 'ft', 'data')
+if values[1] then
+    return {values[1], values[2], values[3]}  -- caller inspects status and fingerprint
 end
 
-redis.call('HSET', KEYS[1], 'data', ARGV[1], 'ft', ARGV[2])
-redis.call('PEXPIRE', KEYS[1], ARGV[3])
-return nil  -- proceed with handler
+local ft = redis.call('INCR', KEYS[2])
+redis.call('HSET', KEYS[1], 'data', ARGV[1], 'ft', ft)
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return {'created', tostring(ft), ARGV[1]}  -- proceed with handler

@@ -12,9 +12,9 @@ use super::IdempotencyStore;
 use super::InsertResult;
 use crate::entry::Completed;
 use crate::entry::ExistingEntry;
-use crate::entry::FencingToken;
 use crate::entry::IdempotencyEntry;
 use crate::entry::Processing;
+use crate::fencing_token::FencingToken;
 use crate::key::IdempotencyKey;
 
 /// An in-memory [`IdempotencyStore`] backed by a `HashMap`.
@@ -25,9 +25,14 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-    /// Creates a new `MemoryStore` and spawns a background task for
-    /// processing store actions and sweeping expired entries.
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "MemoryStore::new"))]
+    /// Creates a new in-memory store.
+    ///
+    /// It spawns spawns a background task for processing store actions and sweeping expired
+    /// entries.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "MemoryStore::new", level=tracing::Level::DEBUG)
+    )]
     pub fn new(buffer: usize, sweep_interval: Duration) -> Self {
         let (tx, rx) = mpsc::channel(buffer);
         let store_state = StoreState::new();
@@ -42,7 +47,12 @@ impl IdempotencyStore for MemoryStore {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStore::try_insert", skip(self), err(Debug))
+        tracing::instrument(
+            name = "MemoryStore::try_insert",
+            skip(self),
+            fields(key = %key),
+            err(Debug),
+        )
     )]
     async fn try_insert(
         &self,
@@ -101,6 +111,7 @@ impl IdempotencyStore for MemoryStore {
 #[derive(Debug, Default)]
 struct StoreState {
     entries: HashMap<IdempotencyKey, StoreRecord>,
+    next_token: u64,
 }
 
 impl StoreState {
@@ -157,10 +168,12 @@ impl StoreState {
             return InsertResult::Exists(record.existing.clone());
         }
 
-        let fencing_token = entry.fencing_token();
+        self.next_token += 1;
+        let fencing_token = FencingToken(self.next_token);
         let ttl = entry.ttl;
         let record = StoreRecord {
             existing: ExistingEntry::Processing(entry),
+            fencing_token,
             created_at: Instant::now(),
             ttl,
         };
@@ -179,8 +192,8 @@ impl StoreState {
         fencing_token: FencingToken,
     ) {
         if let Some(record) = self.entries.get_mut(&key)
-            && let ExistingEntry::Processing(existing) = &record.existing
-            && existing.fencing_token() == fencing_token
+            && let ExistingEntry::Processing(_) = &record.existing
+            && record.fencing_token == fencing_token
         {
             record.ttl = entry.ttl;
             record.existing = ExistingEntry::Completed(entry);
@@ -203,6 +216,7 @@ impl StoreState {
 #[derive(Debug)]
 struct StoreRecord {
     existing: ExistingEntry,
+    fencing_token: FencingToken,
     created_at: Instant,
     ttl: Duration,
 }
@@ -377,7 +391,7 @@ mod tests {
         );
 
         let completed = entry.complete(response);
-        let wrong_token = FencingToken::new();
+        let wrong_token = FencingToken(u64::MAX);
         store.complete(key.clone(), completed, wrong_token);
 
         let second = store.try_insert(
@@ -570,7 +584,7 @@ mod tests {
 
         let completed =
             IdempotencyEntry::new(fingerprint, Duration::from_secs(SECONDS)).complete(response);
-        let wrong_token = FencingToken::new();
+        let wrong_token = FencingToken(4);
         store
             .complete(&key, completed, wrong_token)
             .await

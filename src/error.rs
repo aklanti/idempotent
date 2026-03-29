@@ -2,11 +2,16 @@
 
 /// Idempotency error
 #[derive(Debug, thiserror::Error)]
-pub enum IdempotencyError {
+pub enum Error {
     /// The key is empty.
     #[error("idempotency key cannot be empty")]
     EmptyKey,
+
     /// The key exceeds the 255-byte maximum.
     #[error("idempotency key exceeds 255 bytes (got {0})")]
     KeyTooLong(usize),
+
+    /// The fencing token is invalid.
+    #[error("negative fencing token")]
+    InvalidFencingToken,
 }

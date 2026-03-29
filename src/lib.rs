@@ -7,23 +7,30 @@
 pub mod config;
 pub mod entry;
 pub mod error;
+mod fencing_token;
 pub mod fingerprint;
 pub mod key;
 pub mod store;
 
 #[doc(inline)]
-pub use entry::CachedResponse;
+pub use self::entry::CachedResponse;
 #[doc(inline)]
-pub use entry::IdempotencyEntry;
+pub use self::entry::IdempotencyEntry;
 #[doc(inline)]
-pub use entry::Metadata;
+pub use self::entry::Metadata;
 #[doc(inline)]
-pub use fingerprint::Fingerprint;
+pub use self::error::Error;
 #[doc(inline)]
-pub use key::IdempotencyKey;
+pub use self::fingerprint::Fingerprint;
+#[doc(inline)]
+pub use self::key::IdempotencyKey;
+#[doc(inline)]
+pub use self::store::IdempotencyStore;
+#[doc(inline)]
+pub use self::store::InsertResult;
 #[doc(inline)]
 #[cfg(feature = "memory")]
-pub use store::memory;
+pub use self::store::memory;
 #[doc(inline)]
 #[cfg(feature = "valkey")]
-pub use store::valkey;
+pub use self::store::valkey;
