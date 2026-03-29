@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use super::AnyIdempotencyStore;
-use super::BoxError;
 use super::InsertResult;
 use crate::CachedResponse;
 use crate::ClaimGuard;
@@ -23,14 +22,14 @@ pub struct NoFingerprint;
 pub struct WithFingerprint(Fingerprint);
 
 /// A builder for a claim.
-pub struct ClaimBuilder<'store, S: IdempotencyStore, State = NoFingerprint> {
+pub struct ClaimBuilder<'store, S: IdempotencyStore + ?Sized, State = NoFingerprint> {
     store: &'store S,
     key: &'store IdempotencyKey,
     processing_ttl: Duration,
     state: State,
 }
 
-impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, NoFingerprint> {
+impl<'store, S: IdempotencyStore + ?Sized> ClaimBuilder<'store, S, NoFingerprint> {
     pub(crate) const fn new(
         store: &'store S,
         key: &'store IdempotencyKey,
@@ -70,7 +69,7 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, NoFingerprint> {
     }
 }
 
-impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
+impl<'store, S: IdempotencyStore + ?Sized> ClaimBuilder<'store, S, WithFingerprint> {
     /// Claims the key, returning a [`ClaimGuard`] on success or the entry that already exists.
     ///
     /// # Errors
@@ -137,65 +136,22 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
 }
 
 impl dyn AnyIdempotencyStore {
-    /// Claims the key and runs the side effect, or replays the cached response on a matching retry.
+    /// Creates a builder for a borrowed claim, like [`IdempotencyStore::claim`].
     ///
-    /// The counterpart of [`ClaimBuilder::execute_or_replay`] for callers holding the store as
-    /// `Arc<dyn AnyIdempotencyStore>`. It calls the trait's own methods directly, so it resolves
-    /// inside boxed futures where the [`IdempotencyStore`] impl on the `Arc` cannot be named. The
-    /// request is fingerprinted from `operation` and `body` with the default strategy.
-    ///
-    /// If the store rejects the completion, the response is still considered as executed.
-    ///
-    /// Dropping the returned future before it completes leaves the claim in place until the
-    /// processing TTL expires.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the side effect fails, or if a store operation fails.
-    /// When the side effect fails, the claim is left to expire so a later retry re-runs it.
-    pub async fn execute_or_replay<F, Fut>(
-        &self,
-        key: &IdempotencyKey,
+    /// An inherent method, so it resolves on the trait object itself — including
+    /// inside boxed futures where the [`IdempotencyStore`] impl on the `Arc` cannot be named.
+    /// Reach it through a deref: `(&*store).claim(…)`.
+    pub const fn claim<'store>(
+        &'store self,
+        key: &'store IdempotencyKey,
         processing_ttl: Duration,
-        completed_ttl: Duration,
-        operation: &str,
-        body: &[u8],
-        side_effect: F,
-    ) -> Result<ExecutionOutcome, ExecutionError<BoxError>>
-    where
-        F: FnOnce(FencingToken) -> Fut,
-        Fut: Future<Output = Result<CachedResponse, Box<dyn std::error::Error + Send + Sync>>>,
-    {
-        let fingerprint = DefaultFingerprintStrategy.compute(operation, body);
-        let entry = IdempotencyEntry::new(fingerprint, processing_ttl);
-        match self
-            .try_insert(key, entry.clone())
-            .await
-            .map_err(ExecutionError::Store)?
-        {
-            InsertResult::Claimed { fencing_token } => {
-                let response = side_effect(fencing_token)
-                    .await
-                    .map_err(ExecutionError::SideEffect)?;
-                let outcome = self
-                    .complete(
-                        key,
-                        entry.complete(response.clone()),
-                        fencing_token,
-                        completed_ttl,
-                    )
-                    .await
-                    .map_err(ExecutionError::Store)?;
-                warn_if_rejected(outcome);
-                Ok(ExecutionOutcome::Executed(response))
-            }
-            InsertResult::Exists(existing) => Ok(replay_outcome(existing, fingerprint)),
-        }
+    ) -> ClaimBuilder<'store, Self, NoFingerprint> {
+        ClaimBuilder::new(self, key, processing_ttl)
     }
 }
 
 /// The outcome of a borrowed claim.
-pub enum ClaimOutcome<'store, S: IdempotencyStore> {
+pub enum ClaimOutcome<'store, S: IdempotencyStore + ?Sized> {
     /// The key was claimed.
     Claimed(ClaimGuard<'store, S>),
     /// The key is already taken.

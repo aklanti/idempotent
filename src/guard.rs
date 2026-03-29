@@ -12,14 +12,14 @@ use crate::entry::Processing;
 use crate::fencing_token::FencingToken;
 
 /// A borrowed handle to a claimed key.
-pub struct ClaimGuard<'a, S: IdempotencyStore> {
+pub struct ClaimGuard<'a, S: IdempotencyStore + ?Sized> {
     store: &'a S,
     key: &'a IdempotencyKey,
     fencing_token: FencingToken,
     entry: IdempotencyEntry<Processing>,
 }
 
-impl<'a, S: IdempotencyStore> ClaimGuard<'a, S> {
+impl<'a, S: IdempotencyStore + ?Sized> ClaimGuard<'a, S> {
     /// Creates a borrowed claim guard owning the claimed entry.
     pub(crate) const fn new(
         store: &'a S,
@@ -36,7 +36,7 @@ impl<'a, S: IdempotencyStore> ClaimGuard<'a, S> {
     }
 }
 
-impl<S: IdempotencyStore> ClaimGuard<'_, S> {
+impl<S: IdempotencyStore + ?Sized> ClaimGuard<'_, S> {
     /// Returns the fencing token issued for this claim.
     pub const fn fencing_token(&self) -> FencingToken {
         self.fencing_token

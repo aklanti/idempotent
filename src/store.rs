@@ -317,6 +317,49 @@ impl IdempotencyStore for Arc<dyn AnyIdempotencyStore> {
     }
 }
 
+impl IdempotencyStore for dyn AnyIdempotencyStore {
+    type Error = BoxError;
+
+    async fn try_insert(
+        &self,
+        key: &IdempotencyKey,
+        entry: IdempotencyEntry<Processing>,
+    ) -> Result<InsertResult, Self::Error> {
+        AnyIdempotencyStore::try_insert(self, key, entry).await
+    }
+
+    async fn complete(
+        &self,
+        key: &IdempotencyKey,
+        entry: IdempotencyEntry<Completed>,
+        fencing_token: FencingToken,
+        completed_ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error> {
+        AnyIdempotencyStore::complete(self, key, entry, fencing_token, completed_ttl).await
+    }
+
+    async fn remove(
+        &self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+    ) -> Result<FencedOutcome, Self::Error> {
+        AnyIdempotencyStore::remove(self, key, fencing_token).await
+    }
+
+    async fn touch(
+        &self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+        ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error> {
+        AnyIdempotencyStore::touch(self, key, fencing_token, ttl).await
+    }
+
+    async fn purge(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
+        AnyIdempotencyStore::purge(self, key).await
+    }
+}
+
 #[cfg(all(test, feature = "memory"))]
 mod tests {
     use std::sync::Arc;
@@ -365,15 +408,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn erased_store_executes_then_replays() {
+    async fn any_store_executes_then_replays() {
         let store = MemoryStore::builder()
             .buffer(16)
             .sweep_interval(Duration::from_secs(60))
             .try_build()
             .expect("build memory store");
         let store: Arc<dyn AnyIdempotencyStore> = Arc::new(store);
+        let store: &dyn AnyIdempotencyStore = &*store;
 
-        let key = IdempotencyKey::new("erased").expect("valid key");
+        let key = IdempotencyKey::new("achebe").expect("valid key");
         let response = CachedResponse {
             status_code: 201,
             metadata: Metadata::new(),
@@ -381,30 +425,22 @@ mod tests {
         };
 
         let first = store
-            .execute_or_replay(
-                &key,
-                Duration::from_secs(30),
-                Duration::from_secs(60),
-                "POST /charges",
-                b"{}",
-                |_token| {
-                    let response = response.clone();
-                    async move { Ok(response) }
-                },
-            )
+            .claim(&key, Duration::from_secs(30))
+            .fingerprint("POST /charges", b"{}")
+            .execute_or_replay(Duration::from_secs(60), |_token| {
+                let response = response.clone();
+                async move { Ok(response) }
+            })
             .await
             .expect("execute");
         assert!(matches!(first, ExecutionOutcome::Executed(_)));
 
         let second = store
-            .execute_or_replay(
-                &key,
-                Duration::from_secs(30),
-                Duration::from_secs(60),
-                "POST /charges",
-                b"{}",
-                |_token| async move { Err("the side effect must not re-run on a replay".into()) },
-            )
+            .claim(&key, Duration::from_secs(30))
+            .fingerprint("POST /charges", b"{}")
+            .execute_or_replay(Duration::from_secs(60), |_token| async move {
+                Err("the side effect must not re-run on a replay".into())
+            })
             .await
             .expect("replay");
         let ExecutionOutcome::Replayed(cached) = second else {
