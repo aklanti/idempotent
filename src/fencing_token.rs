@@ -8,7 +8,7 @@ use crate::Error;
 pub struct FencingToken(pub(crate) u64);
 
 impl FencingToken {
-    /// Creates a new fencing token
+    /// Returns the fencing token value.
     pub const fn value(self) -> u64 {
         self.0
     }
@@ -23,6 +23,17 @@ impl TryFrom<i64> for FencingToken {
             .map(Self)
     }
 }
+
+#[cfg(feature = "valkey")]
+const _: () = {
+    use redis::RedisWrite;
+    use redis::ToRedisArgs;
+    impl ToRedisArgs for FencingToken {
+        fn write_redis_args<W: ?Sized + RedisWrite>(&self, out: &mut W) {
+            self.0.write_redis_args(out)
+        }
+    }
+};
 
 /// The result when the operation completes.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

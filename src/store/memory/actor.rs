@@ -81,6 +81,11 @@ impl MemoryStoreActor {
             return InsertResult::Exists(record.existing.clone());
         }
 
+        #[cfg(feature = "tracing")]
+        if self.contains(&key) {
+            tracing::info!(key = %key, "reclaimed expired key");
+        }
+
         self.next_token += 1;
         let fencing_token = FencingToken(self.next_token);
         let ttl = entry.ttl;
@@ -116,8 +121,13 @@ impl MemoryStoreActor {
                 record.created_at = Instant::now();
                 return FencedOutcome::Applied;
             }
+            #[cfg(feature = "tracing")]
+            tracing::warn!(key = %key, "fencing mismatch: zombie completion rejected");
             return FencedOutcome::FencingMismatch;
         }
+
+        #[cfg(feature = "tracing")]
+        tracing::warn!(key = %key, "key expired before completion");
         FencedOutcome::KeyExpired
     }
 
@@ -164,10 +174,14 @@ impl MemoryStoreActor {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::sweep")
+        tracing::instrument(name = "MemoryStoreActor::sweep", skip(self))
     )]
     pub fn sweep(&mut self) {
+        let before = self.entries.len();
         self.entries.retain(|_, record| !record.is_expired());
+        let removed = before - self.entries.len();
+        #[cfg(feature = "tracing")]
+        tracing::debug!(removed, remaining = self.entries.len(), "sweep complete");
     }
 
     #[cfg_attr(
@@ -178,7 +192,6 @@ impl MemoryStoreActor {
         self.entries.remove(key);
     }
 
-    #[cfg(test)]
     pub fn contains(&self, key: &IdempotencyKey) -> bool {
         self.entries.contains_key(key)
     }

@@ -27,7 +27,7 @@ impl IdempotencyEntry<Processing> {
         feature = "tracing",
         tracing::instrument(
             name = "IdempotencyEntry::new",
-            level=tracing::Level::INFO,
+            level=tracing::Level::DEBUG,
         )
     )]
     pub fn new(fingerprint: Fingerprint, ttl: Duration) -> Self {

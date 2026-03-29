@@ -11,28 +11,26 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use redis::Client;
-use redis::RedisError;
-use redis::RedisWrite;
 use redis::Script;
-use redis::ToRedisArgs;
 use redis::aio::ConnectionManager;
-use serde::Deserialize;
-use serde::Serialize;
 
 use self::claim::ClaimReply;
 use crate::FencedOutcome;
 use crate::IdempotencyStore;
 use crate::InsertResult;
-use crate::entry::CachedResponse;
 use crate::entry::Completed;
 use crate::entry::ExistingEntry;
 use crate::entry::IdempotencyEntry;
 use crate::entry::Processing;
 use crate::fencing_token::FencingToken;
-use crate::fingerprint::Fingerprint;
 use crate::key::IdempotencyKey;
 
 mod claim;
+mod error;
+mod wire;
+
+use self::error::ValkeyError;
+use self::wire::WireEntry;
 
 /// Lua script for atomic key claiming. Returns `nil` on success
 /// or the existing entry bytes if the key is already taken.
@@ -234,142 +232,6 @@ impl IdempotencyStore for ValkeyStore {
             .exec_async(&mut self.conn.clone())
             .await?;
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WireEntry {
-    status: WireStatus,
-    fingerprint: Fingerprint,
-    ttl: Duration,
-    response: Option<CachedResponse>,
-}
-
-impl WireEntry {
-    /// Serializes the wire entry with a version byte prefix followed by the payload.
-    fn to_bytes(&self) -> Result<Vec<u8>, ValkeyError> {
-        let payload = postcard::to_allocvec(self)?;
-        let mut buf = Vec::with_capacity(1 + payload.len());
-        buf.push(WIRE_VERSION);
-        buf.extend_from_slice(&payload);
-        Ok(buf)
-    }
-}
-
-impl From<&IdempotencyEntry<Processing>> for WireEntry {
-    fn from(entry: &IdempotencyEntry<Processing>) -> Self {
-        Self {
-            status: WireStatus::Processing,
-            fingerprint: entry.fingerprint,
-            response: None,
-            ttl: entry.ttl,
-        }
-    }
-}
-
-impl From<&IdempotencyEntry<Completed>> for WireEntry {
-    fn from(entry: &IdempotencyEntry<Completed>) -> Self {
-        Self {
-            status: WireStatus::Complete,
-            fingerprint: entry.fingerprint,
-            response: Some(entry.response().clone()),
-            ttl: entry.ttl,
-        }
-    }
-}
-
-/// Current wire version
-const WIRE_VERSION: u8 = WireVersion::V1 as u8;
-
-impl TryFrom<&[u8]> for WireEntry {
-    type Error = ValkeyError;
-
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "WireEntry::try_from", err(Debug))
-    )]
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let (&version, payload) = bytes
-            .split_first()
-            .ok_or_else(|| ValkeyError::Decode("empty wire data".into()))?;
-        match version {
-            WIRE_VERSION => Ok(postcard::from_bytes(payload)?),
-            v => Err(ValkeyError::Decode(
-                format!("unknown wire version: {v}").into(),
-            )),
-        }
-    }
-}
-
-impl TryFrom<WireEntry> for ExistingEntry {
-    type Error = ValkeyError;
-
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "ExistingEntry::try_from", err(Debug))
-    )]
-    fn try_from(wire: WireEntry) -> Result<Self, ValkeyError> {
-        match wire.status {
-            WireStatus::Processing => {
-                let entry = IdempotencyEntry::new(wire.fingerprint, wire.ttl);
-                Ok(ExistingEntry::Processing(entry))
-            }
-            WireStatus::Complete => {
-                let response = wire.response.ok_or_else(|| {
-                    ValkeyError::Decode("completed entry missing response".into())
-                })?;
-                let entry = IdempotencyEntry::new(wire.fingerprint, wire.ttl).complete(response);
-                Ok(ExistingEntry::Completed(entry))
-            }
-        }
-    }
-}
-
-/// Entry state as persisted in the store.
-///
-/// It maps the idempotency entry typestate variants reconstructed in [`ExistingEntry`]
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-enum WireStatus {
-    Complete,
-    Processing,
-}
-
-/// Schema version for the wire format
-///
-/// The version is bumped when changing [`WireEntry`] fields to
-/// support rolling deploys where old and new nodes coexist.
-#[derive(Debug, Copy, Clone)]
-#[repr(u8)]
-enum WireVersion {
-    V1 = 1,
-}
-
-/// Errors returned by [`ValkeyStore`] operations.
-#[derive(Debug, thiserror::Error)]
-pub enum ValkeyError {
-    /// A connection or network error.
-    #[error("connection error")]
-    Connection(#[source] Box<dyn std::error::Error + Send + Sync>),
-    /// The stored entry could not be decoded.
-    #[error("decode error")]
-    Decode(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
-
-impl From<RedisError> for ValkeyError {
-    fn from(error: RedisError) -> Self {
-        Self::Connection(Box::new(error))
-    }
-}
-
-impl From<postcard::Error> for ValkeyError {
-    fn from(error: postcard::Error) -> Self {
-        Self::Decode(Box::new(error))
-    }
-}
-
-impl ToRedisArgs for FencingToken {
-    fn write_redis_args<W: ?Sized + RedisWrite>(&self, out: &mut W) {
-        self.0.write_redis_args(out)
     }
 }
 

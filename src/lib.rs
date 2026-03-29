@@ -26,6 +26,8 @@ pub use self::fingerprint::Fingerprint;
 #[doc(inline)]
 pub use self::guard::ClaimGuard;
 #[doc(inline)]
+pub use self::guard::OwnedClaimGuard;
+#[doc(inline)]
 pub use self::key::IdempotencyKey;
 #[doc(inline)]
 pub use self::metadata::Metadata;
