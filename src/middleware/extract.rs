@@ -5,7 +5,7 @@ use crate::Error;
 use crate::IdempotencyKey;
 
 /// Extractor of the idempotency key from a request.
-pub trait ExtractIdempotencyKey: Send + Sync + 'static {
+pub trait IdempotencyKeyExtractor: Send + Sync + 'static {
     /// Extract the idempotency key from request metadata.
     fn extract_from_parts(&self, parts: &Parts) -> Option<Result<IdempotencyKey, Error>>;
 
@@ -38,7 +38,7 @@ impl Default for HeaderKeyExtractor {
     }
 }
 
-impl ExtractIdempotencyKey for HeaderKeyExtractor {
+impl IdempotencyKeyExtractor for HeaderKeyExtractor {
     fn extract_from_parts(&self, parts: &Parts) -> Option<Result<IdempotencyKey, Error>> {
         let value = parts.headers.get(&self.header)?;
         let value = value
@@ -62,7 +62,7 @@ impl<F> BodyFieldKeyExtractor<F> {
     }
 }
 
-impl<F> ExtractIdempotencyKey for BodyFieldKeyExtractor<F>
+impl<F> IdempotencyKeyExtractor for BodyFieldKeyExtractor<F>
 where
     F: Fn(&[u8]) -> Option<String> + Send + Sync + 'static,
 {
