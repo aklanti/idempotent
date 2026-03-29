@@ -100,7 +100,7 @@ impl IdempotencyStore for ValkeyStore {
         feature = "tracing",
         tracing::instrument(
             name = "ValkeyStore::try_insert",
-            skip(self),
+            skip(self, entry),
             fields(key = %key, prefix = ?self.service_name),
             err(Display))
     )]
@@ -136,7 +136,7 @@ impl IdempotencyStore for ValkeyStore {
         feature = "tracing",
         tracing::instrument(
             name = "ValkeyStore::complete",
-            skip(self),
+            skip(self, entry, fencing_token),
             fields(key = %key, prefix = ?self.service_name),
             err(Display),
         )
@@ -167,7 +167,7 @@ impl IdempotencyStore for ValkeyStore {
         tracing::instrument(
             name = "ValkeyStore::remove",
             fields(key = %key, prefix = ?self.service_name),
-            skip(self),
+            skip(self, fencing_token),
             err(Display),
         )
     )]
@@ -192,7 +192,7 @@ impl IdempotencyStore for ValkeyStore {
         tracing::instrument(
             name = "ValkeyStore::touch",
             fields(key = %key, prefix = ?self.service_name),
-            skip(self),
+            skip(self, fencing_token),
             err(Display),
         )
     )]

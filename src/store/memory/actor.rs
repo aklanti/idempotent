@@ -27,7 +27,7 @@ impl MemoryStoreActor {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::run", skip(self, rx))
+        tracing::instrument(name = "MemoryStoreActor::run", skip_all)
     )]
     pub async fn run(mut self, mut rx: mpsc::Receiver<Command>, sweep_interval: Duration) {
         let mut interval = tokio::time::interval(sweep_interval);
@@ -70,7 +70,11 @@ impl MemoryStoreActor {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::try_insert", skip(self), fields(key = %key)),
+        tracing::instrument(
+            name = "MemoryStoreActor::try_insert",
+            skip_all,
+            fields(key = %key),
+        ),
     )]
     pub fn try_insert(
         &mut self,
@@ -101,7 +105,11 @@ impl MemoryStoreActor {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::complete")
+        tracing::instrument(
+            name = "MemoryStoreActor::complete",
+            skip_all,
+            fields(key = %key),
+        )
     )]
     pub fn complete(
         &mut self,
@@ -133,7 +141,11 @@ impl MemoryStoreActor {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::remove", fields(key = %key)),
+        tracing::instrument(
+            name = "MemoryStoreActor::remove",
+            skip_all,
+            fields(key = %key),
+        ),
     )]
     pub fn remove(&mut self, key: &IdempotencyKey, fencing_token: FencingToken) -> FencedOutcome {
         match self.entries.get(key).filter(|record| !record.is_expired()) {
@@ -141,14 +153,22 @@ impl MemoryStoreActor {
                 self.entries.remove(key);
                 FencedOutcome::Applied
             }
-            Some(_) => FencedOutcome::FencingMismatch,
+            Some(_) => {
+                #[cfg(feature = "tracing")]
+                tracing::warn!(key = %key, "remove rejected: fencing mismatch");
+                FencedOutcome::FencingMismatch
+            }
             None => FencedOutcome::KeyExpired,
         }
     }
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::touch", fields(key = %key)),
+        tracing::instrument(
+            name = "MemoryStoreActor::touch",
+            skip_all,
+            fields(key = %key),
+        ),
     )]
     fn touch(
         &mut self,
@@ -174,7 +194,7 @@ impl MemoryStoreActor {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::sweep", skip(self))
+        tracing::instrument(name = "MemoryStoreActor::sweep", skip_all)
     )]
     pub fn sweep(&mut self) {
         let before = self.entries.len();
@@ -186,9 +206,11 @@ impl MemoryStoreActor {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::purge", fields(key = %key)),
+        tracing::instrument(name = "MemoryStoreActor::purge", skip_all, fields(key = %key)),
     )]
     pub fn purge(&mut self, key: &IdempotencyKey) {
+        #[cfg(feature = "tracing")]
+        tracing::warn!(key = %key, "purge: unfenced delete");
         self.entries.remove(key);
     }
 

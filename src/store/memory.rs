@@ -76,7 +76,7 @@ impl IdempotencyStore for MemoryStore {
         feature = "tracing",
         tracing::instrument(
             name = "MemoryStore::complete",
-            skip(self),
+            skip(self, entry, fencing_token),
             fields(key  = %key),
             err(Display),
         )
@@ -106,7 +106,7 @@ impl IdempotencyStore for MemoryStore {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStore::remove", skip(self), err(Display))
+        tracing::instrument(name = "MemoryStore::remove", skip(self, fencing_token), err(Display),)
     )]
     async fn remove(
         &self,
@@ -125,7 +125,7 @@ impl IdempotencyStore for MemoryStore {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "MemoryStore::touch", skip(self), err(Display))
+        tracing::instrument(name = "MemoryStore::touch", skip(self, fencing_token), err(Display))
     )]
     async fn touch(
         &self,
