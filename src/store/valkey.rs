@@ -333,7 +333,6 @@ mod tests {
     use testcontainers_modules::valkey::Valkey;
 
     use super::*;
-
     use crate::Metadata;
     use crate::entry::CachedResponse;
     use crate::fingerprint::DefaultFingerprintStrategy;

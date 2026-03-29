@@ -132,13 +132,9 @@ impl MemoryStoreActor {
         {
             let claimed_fingerprint = processing.fingerprint;
             if record.fencing_token != fencing_token {
-                #[cfg(feature = "tracing")]
-                tracing::warn!(key = %key, "fencing mismatch: zombie completion rejected");
                 return FencedOutcome::FencingMismatch;
             }
             if claimed_fingerprint != entry.fingerprint {
-                #[cfg(feature = "tracing")]
-                tracing::warn!(key = %key, "fingerprint mismatch: completion body differs from the claim");
                 return FencedOutcome::FingerprintMismatch;
             }
             record.ttl = entry.ttl;
@@ -147,8 +143,6 @@ impl MemoryStoreActor {
             return FencedOutcome::Applied;
         }
 
-        #[cfg(feature = "tracing")]
-        tracing::warn!(key = %key, "key expired before completion");
         FencedOutcome::KeyExpired
     }
 
