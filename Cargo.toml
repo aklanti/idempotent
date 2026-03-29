@@ -16,9 +16,9 @@ features = ["memory", "middleware", "serde", "tonic", "tracing", "uuid", "valkey
 [features]
 default = ["uuid"]
 memory = ["tokio/time", "tokio/macros"]
-middleware = ["dep:http", "dep:tower"]
+middleware = ["dep:http", "dep:tower", "http-body", "http-body-util"]
 serde = ["dep:serde", "bytes/serde", "uuid?/serde"]
-tonic = ["dep:tonic"]
+tonic = ["dep:tonic", "middleware"]
 tracing = ["dep:tracing"]
 uuid = ["dep:uuid"]
 valkey = ["dep:redis", "dep:postcard", "serde"]
@@ -26,6 +26,8 @@ valkey = ["dep:redis", "dep:postcard", "serde"]
 [dependencies]
 bytes = { version = "1" }
 http = { version = "1", optional = true }
+http-body = { version = "1", optional = true }
+http-body-util = { version = "1", optional = true }
 postcard = { version = "1", optional = true, features = ["alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
