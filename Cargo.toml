@@ -11,22 +11,27 @@ keywords = ["idempotency", "idempotent", "api", "retry", "deduplication"]
 categories = ["web-programming", "data-structures"]
 
 [package.metadata.docs.rs]
-features = ["memory", "serde", "tracing", "uuid", "valkey"]
+features = ["memory", "middleware", "serde", "tonic", "tracing", "uuid", "valkey"]
 
 [features]
 default = ["uuid"]
 memory = ["tokio/time", "tokio/macros"]
+middleware = ["dep:http", "dep:tower"]
 serde = ["dep:serde", "bytes/serde", "uuid?/serde"]
+tonic = ["dep:tonic"]
 tracing = ["dep:tracing"]
 uuid = ["dep:uuid"]
 valkey = ["dep:redis", "dep:postcard", "serde"]
 
 [dependencies]
 bytes = { version = "1" }
+http = { version = "1", optional = true }
 postcard = { version = "1", optional = true, features = ["alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt"] }
+tonic = { version = "0.14", optional = true }
+tower = { version = "0.5", features = ["util"], optional = true }
 tracing = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

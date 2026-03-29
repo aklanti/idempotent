@@ -11,6 +11,8 @@ pub mod fingerprint;
 pub mod guard;
 pub mod key;
 pub mod metadata;
+#[cfg(feature = "middleware")]
+pub mod middleware;
 pub mod store;
 
 #[doc(inline)]
