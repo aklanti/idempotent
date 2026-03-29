@@ -1,7 +1,7 @@
 use std::time::Duration;
 
+use super::AnyIdempotencyStore;
 use super::BoxError;
-use super::DynIdempotencyStore;
 use super::InsertResult;
 use crate::CachedResponse;
 use crate::ClaimGuard;
@@ -136,13 +136,13 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
     }
 }
 
-impl dyn DynIdempotencyStore {
+impl dyn AnyIdempotencyStore {
     /// Claims the key and runs the side effect, or replays the cached response on a matching retry.
     ///
-    /// The erased counterpart of [`ClaimBuilder::execute_or_replay`], for callers holding the
-    /// store as `Arc<dyn DynIdempotencyStore>`. It rides the object-safe methods directly, so it
-    /// resolves inside boxed futures where the [`IdempotencyStore`] impl on the `Arc` cannot be
-    /// named. The request is fingerprinted from `operation` and `body` with the default strategy.
+    /// The counterpart of [`ClaimBuilder::execute_or_replay`] for callers holding the store as
+    /// `Arc<dyn AnyIdempotencyStore>`. It calls the trait's own methods directly, so it resolves
+    /// inside boxed futures where the [`IdempotencyStore`] impl on the `Arc` cannot be named. The
+    /// request is fingerprinted from `operation` and `body` with the default strategy.
     ///
     /// If the store rejects the completion, the response is still considered as executed.
     ///

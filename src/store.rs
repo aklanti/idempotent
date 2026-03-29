@@ -146,7 +146,7 @@ pub enum InsertResult {
     Exists(ExistingEntry),
 }
 
-/// The boxed error type returned by [`DynIdempotencyStore`].
+/// The boxed error type returned by [`AnyIdempotencyStore`].
 #[derive(Debug)]
 pub struct BoxError(Box<dyn std::error::Error + Send + Sync>);
 
@@ -169,8 +169,8 @@ impl std::error::Error for BoxError {
     }
 }
 
-/// [`IdempotencyStore`] usable behind a pointer such as `Arc<dyn DynIdempotencyStore>`.
-pub trait DynIdempotencyStore: Send + Sync + 'static {
+/// [`IdempotencyStore`] usable behind a pointer such as `Arc<dyn AnyIdempotencyStore>`.
+pub trait AnyIdempotencyStore: Send + Sync + 'static {
     /// Claims `key`.
     fn try_insert<'a>(
         &'a self,
@@ -210,7 +210,7 @@ pub trait DynIdempotencyStore: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send + 'a>>;
 }
 
-impl<S: IdempotencyStore> DynIdempotencyStore for S {
+impl<S: IdempotencyStore> AnyIdempotencyStore for S {
     fn try_insert<'a>(
         &'a self,
         key: &'a IdempotencyKey,
@@ -274,7 +274,7 @@ impl<S: IdempotencyStore> DynIdempotencyStore for S {
     }
 }
 
-impl IdempotencyStore for Arc<dyn DynIdempotencyStore> {
+impl IdempotencyStore for Arc<dyn AnyIdempotencyStore> {
     type Error = BoxError;
 
     async fn try_insert(
@@ -282,7 +282,7 @@ impl IdempotencyStore for Arc<dyn DynIdempotencyStore> {
         key: &IdempotencyKey,
         entry: IdempotencyEntry<Processing>,
     ) -> Result<InsertResult, Self::Error> {
-        DynIdempotencyStore::try_insert(&**self, key, entry).await
+        AnyIdempotencyStore::try_insert(&**self, key, entry).await
     }
 
     async fn complete(
@@ -292,7 +292,7 @@ impl IdempotencyStore for Arc<dyn DynIdempotencyStore> {
         fencing_token: FencingToken,
         completed_ttl: Duration,
     ) -> Result<FencedOutcome, Self::Error> {
-        DynIdempotencyStore::complete(&**self, key, entry, fencing_token, completed_ttl).await
+        AnyIdempotencyStore::complete(&**self, key, entry, fencing_token, completed_ttl).await
     }
 
     async fn remove(
@@ -300,7 +300,7 @@ impl IdempotencyStore for Arc<dyn DynIdempotencyStore> {
         key: &IdempotencyKey,
         fencing_token: FencingToken,
     ) -> Result<FencedOutcome, Self::Error> {
-        DynIdempotencyStore::remove(&**self, key, fencing_token).await
+        AnyIdempotencyStore::remove(&**self, key, fencing_token).await
     }
 
     async fn touch(
@@ -309,11 +309,11 @@ impl IdempotencyStore for Arc<dyn DynIdempotencyStore> {
         fencing_token: FencingToken,
         ttl: Duration,
     ) -> Result<FencedOutcome, Self::Error> {
-        DynIdempotencyStore::touch(&**self, key, fencing_token, ttl).await
+        AnyIdempotencyStore::touch(&**self, key, fencing_token, ttl).await
     }
 
     async fn purge(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
-        DynIdempotencyStore::purge(&**self, key).await
+        AnyIdempotencyStore::purge(&**self, key).await
     }
 }
 
@@ -326,7 +326,7 @@ mod tests {
     use crate::FencedOutcome;
     use crate::IdempotencyKey;
     use crate::Metadata;
-    use crate::store::DynIdempotencyStore;
+    use crate::store::AnyIdempotencyStore;
     use crate::store::IdempotencyStore;
     use crate::store::claim::ClaimOutcome;
     use crate::store::claim::ExecutionOutcome;
@@ -339,7 +339,7 @@ mod tests {
             .sweep_interval(Duration::from_secs(60))
             .try_build()
             .expect("build memory store");
-        let store: Arc<dyn DynIdempotencyStore> = Arc::new(store);
+        let store: Arc<dyn AnyIdempotencyStore> = Arc::new(store);
 
         let key = IdempotencyKey::new("shared").expect("valid key");
         let outcome = store
@@ -371,7 +371,7 @@ mod tests {
             .sweep_interval(Duration::from_secs(60))
             .try_build()
             .expect("build memory store");
-        let store: Arc<dyn DynIdempotencyStore> = Arc::new(store);
+        let store: Arc<dyn AnyIdempotencyStore> = Arc::new(store);
 
         let key = IdempotencyKey::new("erased").expect("valid key");
         let response = CachedResponse {
