@@ -112,6 +112,29 @@ impl IdempotencyStore for MemoryStore {
         rx.await.expect("a response");
         Ok(())
     }
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "MemoryStore::touch", skip(self), err(Debug))
+    )]
+    async fn touch(
+        &self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+        ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error> {
+        let (reply, rx) = oneshot::channel();
+        let action = StoreAction::Touch {
+            key: key.clone(),
+            fencing_token,
+            ttl,
+            reply,
+        };
+
+        let _ = self.tx.send(action).await;
+        rx.await.expect("a response");
+        Ok(FencedOutcome::Applied)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -153,6 +176,10 @@ impl StoreState {
                         StoreAction::Remove {key, reply} => {
                             self.remove(&key);
                             let _ = reply.send(());
+                        },
+                        StoreAction::Touch {key, fencing_token, ttl, reply} => {
+                            let result = self.touch(&key, fencing_token, ttl);
+                            let _ = reply.send(result);
                         }
                     }
                 },
@@ -197,7 +224,10 @@ impl StoreState {
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
     ) -> FencedOutcome {
-        if let Some(record) = self.entries.get_mut(&key)
+        if let Some(record) = self
+            .entries
+            .get_mut(&key)
+            .filter(|record| !record.is_expired())
             && let ExistingEntry::Processing(_) = &record.existing
         {
             if record.fencing_token == fencing_token {
@@ -216,6 +246,29 @@ impl StoreState {
     #[cfg_attr(feature = "tracing", tracing::instrument(name = "StoreState::remove"))]
     fn remove(&mut self, key: &IdempotencyKey) {
         self.entries.remove(key);
+    }
+
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "StoreState::touch"))]
+    fn touch(
+        &mut self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+        ttl: Duration,
+    ) -> FencedOutcome {
+        if let Some(record) = self
+            .entries
+            .get_mut(key)
+            .filter(|record| !record.is_expired())
+            && let ExistingEntry::Processing(_) = &record.existing
+        {
+            if record.fencing_token == fencing_token {
+                record.created_at = Instant::now();
+                record.ttl = ttl;
+                return FencedOutcome::Applied;
+            }
+            return FencedOutcome::FencingMismatch;
+        }
+        FencedOutcome::KeyExpired
     }
 
     #[cfg_attr(feature = "tracing", tracing::instrument(name = "StoreState::sweep"))]
@@ -239,6 +292,7 @@ impl StoreRecord {
         self.created_at.elapsed() >= self.ttl
     }
 }
+
 /// Message sent to the background store task.
 enum StoreAction {
     /// Insertion attempt request
@@ -247,6 +301,7 @@ enum StoreAction {
         entry: IdempotencyEntry<Processing>,
         reply: oneshot::Sender<InsertResult>,
     },
+
     Complete {
         key: IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
@@ -254,9 +309,17 @@ enum StoreAction {
         fencing_token: FencingToken,
         reply: oneshot::Sender<FencedOutcome>,
     },
+
     Remove {
         key: IdempotencyKey,
         reply: oneshot::Sender<()>,
+    },
+
+    Touch {
+        key: IdempotencyKey,
+        fencing_token: FencingToken,
+        ttl: Duration,
+        reply: oneshot::Sender<FencedOutcome>,
     },
 }
 

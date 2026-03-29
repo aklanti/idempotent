@@ -44,6 +44,15 @@ pub trait IdempotencyStore: Send + Sync + 'static {
 
     /// Removes an idempotency entry
     async fn remove(&self, key: &IdempotencyKey) -> Result<(), Self::Error>;
+
+    /// Extends the processing lease for an idempotency key by the given `ttl`
+    /// if the fencing token still matches the claim.
+    async fn touch(
+        &self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+        ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error>;
 }
 
 /// The result of [`IdempotencyStore::try_insert`].

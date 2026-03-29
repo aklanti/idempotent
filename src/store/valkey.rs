@@ -51,6 +51,8 @@ impl ValkeyStore {
     /// Lua script for atomic entry completion. Verifies the fencing token
     /// and rejects stale completions.
     const COMPLETE_SCRIPT: &str = include_str!("valkey/scripts/complete.lua");
+    /// Lua script for atomic entry.
+    const TOUCH_SCRIPT: &str = include_str!("valkey/scripts/touch.lua");
 
     /// Creates a new store instance without key prefix.
     pub async fn new(service_name: &str, client: Client) -> Result<Self, ValkeyError> {
@@ -80,7 +82,11 @@ impl IdempotencyStore for ValkeyStore {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "ValkeyStore::try_insert", skip(self), err(Debug))
+        tracing::instrument(
+            name = "ValkeyStore::try_insert",
+            skip(self),
+            fields(key = %key, prefix = ?self.service_name),
+            err(Display))
     )]
     async fn try_insert(
         &self,
@@ -113,7 +119,12 @@ impl IdempotencyStore for ValkeyStore {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "ValkeyStore::complete", skip(self), err(Debug))
+        tracing::instrument(
+            name = "ValkeyStore::complete",
+            skip(self),
+            fields(key = %key, prefix = ?self.service_name),
+            err(Display),
+        )
     )]
     async fn complete(
         &self,
@@ -139,7 +150,12 @@ impl IdempotencyStore for ValkeyStore {
 
     #[cfg_attr(
         feature = "tracing",
-        tracing::instrument(name = "ValkeyStore::remove", skip(self), err(Debug))
+        tracing::instrument(
+            name = "ValkeyStore::remove",
+            fields(key = %key, prefix = ?self.service_name),
+            skip(self),
+            err(Display),
+        )
     )]
     async fn remove(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
         let prefixed = self.prefixed_key(key);
@@ -148,6 +164,36 @@ impl IdempotencyStore for ValkeyStore {
             .exec_async(&mut self.conn.clone())
             .await?;
         Ok(())
+    }
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            name = "ValkeyStore::touch",
+            fields(key = %key, prefix = ?self.service_name),
+            skip(self),
+            err(Display),
+        )
+    )]
+    async fn touch(
+        &self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+        ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error> {
+        let prefixed = self.prefixed_key(key);
+        let ttl_ms = ttl.as_millis();
+        let script = Script::new(Self::TOUCH_SCRIPT);
+
+        let value: i64 = script
+            .key(&prefixed)
+            .arg(fencing_token)
+            .arg(ttl_ms)
+            .invoke_async(&mut self.conn.clone())
+            .await?;
+
+        FencedOutcome::try_from(value)
+            .map_err(|_| ValkeyError::Decode("invalid return type".into()))
     }
 }
 
