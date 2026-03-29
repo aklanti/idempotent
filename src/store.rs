@@ -1,6 +1,7 @@
 //! Idempotency store trait and result types.
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::FencedOutcome;
@@ -146,9 +147,29 @@ pub enum InsertResult {
 }
 
 /// The boxed error type returned by [`DynIdempotencyStore`].
-pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+#[derive(Debug)]
+pub struct BoxError(Box<dyn std::error::Error + Send + Sync>);
 
-/// Object-safe, `dyn`-compatible mirror of [`IdempotencyStore`].
+impl BoxError {
+    /// Boxes `error`.
+    pub fn new<E: std::error::Error + Send + Sync + 'static>(error: E) -> Self {
+        Self(Box::new(error))
+    }
+}
+
+impl std::fmt::Display for BoxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for BoxError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+/// [`IdempotencyStore`] usable behind a pointer such as `Arc<dyn DynIdempotencyStore>`.
 pub trait DynIdempotencyStore: Send + Sync + 'static {
     /// Claims `key`.
     fn try_insert<'a>(
@@ -198,7 +219,7 @@ impl<S: IdempotencyStore> DynIdempotencyStore for S {
         Box::pin(async move {
             IdempotencyStore::try_insert(self, key, entry)
                 .await
-                .map_err(Into::into)
+                .map_err(BoxError::new)
         })
     }
 
@@ -212,7 +233,7 @@ impl<S: IdempotencyStore> DynIdempotencyStore for S {
         Box::pin(async move {
             IdempotencyStore::complete(self, key, entry, fencing_token, completed_ttl)
                 .await
-                .map_err(Into::into)
+                .map_err(BoxError::new)
         })
     }
 
@@ -224,7 +245,7 @@ impl<S: IdempotencyStore> DynIdempotencyStore for S {
         Box::pin(async move {
             IdempotencyStore::remove(self, key, fencing_token)
                 .await
-                .map_err(Into::into)
+                .map_err(BoxError::new)
         })
     }
 
@@ -237,7 +258,7 @@ impl<S: IdempotencyStore> DynIdempotencyStore for S {
         Box::pin(async move {
             IdempotencyStore::touch(self, key, fencing_token, ttl)
                 .await
-                .map_err(Into::into)
+                .map_err(BoxError::new)
         })
     }
 
@@ -245,6 +266,100 @@ impl<S: IdempotencyStore> DynIdempotencyStore for S {
         &'a self,
         key: &'a IdempotencyKey,
     ) -> Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send + 'a>> {
-        Box::pin(async move { IdempotencyStore::purge(self, key).await.map_err(Into::into) })
+        Box::pin(async move {
+            IdempotencyStore::purge(self, key)
+                .await
+                .map_err(BoxError::new)
+        })
+    }
+}
+
+impl IdempotencyStore for Arc<dyn DynIdempotencyStore> {
+    type Error = BoxError;
+
+    async fn try_insert(
+        &self,
+        key: &IdempotencyKey,
+        entry: IdempotencyEntry<Processing>,
+    ) -> Result<InsertResult, Self::Error> {
+        DynIdempotencyStore::try_insert(&**self, key, entry).await
+    }
+
+    async fn complete(
+        &self,
+        key: &IdempotencyKey,
+        entry: IdempotencyEntry<Completed>,
+        fencing_token: FencingToken,
+        completed_ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error> {
+        DynIdempotencyStore::complete(&**self, key, entry, fencing_token, completed_ttl).await
+    }
+
+    async fn remove(
+        &self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+    ) -> Result<FencedOutcome, Self::Error> {
+        DynIdempotencyStore::remove(&**self, key, fencing_token).await
+    }
+
+    async fn touch(
+        &self,
+        key: &IdempotencyKey,
+        fencing_token: FencingToken,
+        ttl: Duration,
+    ) -> Result<FencedOutcome, Self::Error> {
+        DynIdempotencyStore::touch(&**self, key, fencing_token, ttl).await
+    }
+
+    async fn purge(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
+        DynIdempotencyStore::purge(&**self, key).await
+    }
+}
+
+#[cfg(all(test, feature = "memory"))]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::CachedResponse;
+    use crate::FencedOutcome;
+    use crate::IdempotencyKey;
+    use crate::Metadata;
+    use crate::store::DynIdempotencyStore;
+    use crate::store::IdempotencyStore;
+    use crate::store::claim::ClaimOutcome;
+    use crate::store::memory::MemoryStore;
+
+    #[tokio::test]
+    async fn shared_store_claims_and_completes() {
+        let store = MemoryStore::builder()
+            .buffer(16)
+            .sweep_interval(Duration::from_secs(60))
+            .try_build()
+            .expect("build memory store");
+        let store: Arc<dyn DynIdempotencyStore> = Arc::new(store);
+
+        let key = IdempotencyKey::new("shared").expect("valid key");
+        let outcome = store
+            .claim(&key, Duration::from_secs(30))
+            .fingerprint("POST /charges", b"{}")
+            .try_insert()
+            .await
+            .expect("claim");
+        let ClaimOutcome::Claimed(guard) = outcome else {
+            panic!("expected a fresh claim");
+        };
+
+        let response = CachedResponse {
+            status_code: 201,
+            metadata: Metadata::new(),
+            body: b"ok".to_vec().into(),
+        };
+        let applied = guard
+            .complete(response, Duration::from_secs(60))
+            .await
+            .expect("complete");
+        assert_eq!(applied, FencedOutcome::Applied);
     }
 }
