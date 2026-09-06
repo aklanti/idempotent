@@ -1,3 +1,4 @@
+use std::hash::Hash;
 use xxhash_rust::xxh3;
 
 /// A hash of the request operation and body.
@@ -9,6 +10,31 @@ impl Fingerprint {
     /// Creates a fingerprint from a precomputed 128-bit hash.
     pub const fn new(value: u128) -> Self {
         Self(value)
+    }
+    /// Encodes a value as fingerprint body bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use idempotent::fingerprint::body;
+    ///
+    /// #[derive(Hash)]
+    /// struct Charge {
+    ///     account: &'static str,
+    ///     minor_units: i64,
+    /// }
+    ///
+    /// let charge = Charge { account: "acct_1", minor_units: 250 };
+    /// let restated = Charge { account: "acct_1", minor_units: 251 };
+    ///
+    /// assert_eq!(body(&charge), body(&charge));
+    /// assert_ne!(body(&charge), body(&restated));
+    /// ```
+    #[must_use]
+    pub fn body<T: Hash + ?Sized>(value: &T) -> [u8; 16] {
+        let mut hasher = xxh3::Xxh3::new();
+        value.hash(&mut hasher);
+        hasher.digest128().to_le_bytes()
     }
 }
 
