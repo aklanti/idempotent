@@ -98,7 +98,7 @@ impl MemoryStoreActor {
         }
 
         self.next_token += 1;
-        let fencing_token = FencingToken(self.next_token);
+        let fencing_token = FencingToken::new(0, self.next_token);
         let ttl = entry.ttl;
         let record = StoreRecord {
             existing: ExistingEntry::Processing(entry),

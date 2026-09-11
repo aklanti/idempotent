@@ -1,21 +1,19 @@
 //! Fencing tokens and fenced-operation outcomes.
 
-/// A token generated when a key is claimed.
-///
-/// Prevents zombie completions from overwriting a reclaimed key's result.
+/// A token issued when a key is claimed.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct FencingToken(pub(crate) u64);
+pub struct FencingToken {
+    /// The lifetime of the store process that issued the token.
+    pub run_id: u64,
+    /// A monotonic increasing claim number.
+    pub sequence: u64,
+}
 
 impl FencingToken {
-    /// Creates a fencing token.
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    /// Returns the fencing token value.
-    pub const fn value(self) -> u64 {
-        self.0
+    /// Creates a token from the store lifetime that issues it and the claim's number within it.
+    pub const fn new(run_id: u64, sequence: u64) -> Self {
+        Self { run_id, sequence }
     }
 }
 
@@ -24,8 +22,9 @@ const _: () = {
     use redis::RedisWrite;
     use redis::ToRedisArgs;
     impl ToRedisArgs for FencingToken {
+        // Only the sequence is sent until the scripts store the run id as well.
         fn write_redis_args<W: ?Sized + RedisWrite>(&self, out: &mut W) {
-            self.0.write_redis_args(out)
+            self.sequence.write_redis_args(out);
         }
     }
 };
@@ -54,5 +53,20 @@ impl FencedOutcome {
             3 => Some(Self::FingerprintMismatch),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equal_sequences_from_different_lifetimes_differ() {
+        assert_ne!(FencingToken::new(1, 7), FencingToken::new(2, 7));
+    }
+
+    #[test]
+    fn order_follows_the_sequence_within_a_lifetime() {
+        assert!(FencingToken::new(1, 7) < FencingToken::new(1, 8));
     }
 }

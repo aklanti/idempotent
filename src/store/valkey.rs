@@ -404,7 +404,7 @@ mod tests {
             return;
         };
 
-        expect_that!(fencing_token.value(), eq(1));
+        expect_that!(fencing_token.sequence, eq(1));
         let completed = entry.complete(response, TTL);
         let result = store.complete(&key, completed, fencing_token).await;
 
@@ -432,7 +432,10 @@ mod tests {
         expect_that!(
             first,
             ok(pat!(&InsertResult::Claimed {
-                fencing_token: FencingToken(1)
+                fencing_token: pat!(FencingToken {
+                    sequence: eq(1),
+                    ..
+                })
             }))
         );
 
@@ -443,7 +446,10 @@ mod tests {
         expect_that!(
             second,
             ok(pat!(&InsertResult::Claimed {
-                fencing_token: FencingToken(2)
+                fencing_token: pat!(FencingToken {
+                    sequence: eq(2),
+                    ..
+                })
             }))
         );
     }

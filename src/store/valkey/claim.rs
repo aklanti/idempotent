@@ -18,7 +18,7 @@ impl FromRedisValue for ClaimReply {
         let reply = match status.as_str() {
             "created" => {
                 let fencing_token = u64::try_from(ft)
-                    .map(FencingToken::new)
+                    .map(|sequence| FencingToken::new(0, sequence))
                     .map_err(|_| ParsingError::from("negative fencing token"))?;
                 Self::Created { fencing_token }
             }

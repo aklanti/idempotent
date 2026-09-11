@@ -411,7 +411,7 @@ mod tests {
         );
 
         let completed = entry.complete(response, TTL);
-        let wrong_token = FencingToken(u64::MAX);
+        let wrong_token = FencingToken::new(0, u64::MAX);
         store.complete(key.clone(), completed, wrong_token);
 
         let second = store.try_insert(key, IdempotencyEntry::new(fingerprint, TTL));
@@ -607,7 +607,7 @@ mod tests {
         );
 
         let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response, TTL);
-        let wrong_token = FencingToken(4);
+        let wrong_token = FencingToken::new(0, 4);
         store
             .complete(&key, completed, wrong_token)
             .await
