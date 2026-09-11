@@ -17,18 +17,6 @@ impl FencingToken {
     }
 }
 
-#[cfg(feature = "valkey")]
-const _: () = {
-    use redis::RedisWrite;
-    use redis::ToRedisArgs;
-    impl ToRedisArgs for FencingToken {
-        // Only the sequence is sent until the scripts store the run id as well.
-        fn write_redis_args<W: ?Sized + RedisWrite>(&self, out: &mut W) {
-            self.sequence.write_redis_args(out);
-        }
-    }
-};
-
 /// The outcome of a fencing-guarded store operation.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FencedOutcome {

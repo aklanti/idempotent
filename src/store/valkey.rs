@@ -189,7 +189,8 @@ impl IdempotencyStore for ValkeyStore {
         let value: i64 = COMPLETE_SCRIPT
             .key(&prefixed)
             .arg(serialized)
-            .arg(fencing_token)
+            .arg(format!("{:016x}", fencing_token.run_id))
+            .arg(fencing_token.sequence)
             .arg(entry.ttl.as_millis())
             .arg(entry.fingerprint)
             .invoke_async(&mut self.conn.clone())
@@ -215,7 +216,8 @@ impl IdempotencyStore for ValkeyStore {
         let prefixed = self.prefixed_key(key);
         let value: i64 = REMOVE_SCRIPT
             .key(&prefixed)
-            .arg(fencing_token)
+            .arg(format!("{:016x}", fencing_token.run_id))
+            .arg(fencing_token.sequence)
             .invoke_async(&mut self.conn.clone())
             .await?;
 
@@ -242,7 +244,8 @@ impl IdempotencyStore for ValkeyStore {
 
         let value: i64 = TOUCH_SCRIPT
             .key(&prefixed)
-            .arg(fencing_token)
+            .arg(format!("{:016x}", fencing_token.run_id))
+            .arg(fencing_token.sequence)
             .arg(ttl_ms)
             .invoke_async(&mut self.conn.clone())
             .await?;

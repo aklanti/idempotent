@@ -13,14 +13,20 @@ pub enum ClaimReply {
 
 impl FromRedisValue for ClaimReply {
     fn from_redis_value(v: Value) -> Result<Self, ParsingError> {
-        let (status, ft, data): (String, i64, Vec<u8>) = FromRedisValue::from_redis_value(v)?;
+        let (status, run_id, sequence, data): (String, Option<String>, Option<String>, Vec<u8>) =
+            FromRedisValue::from_redis_value(v)?;
 
         let reply = match status.as_str() {
             "created" => {
-                let fencing_token = u64::try_from(ft)
-                    .map(|sequence| FencingToken::new(0, sequence))
-                    .map_err(|_| ParsingError::from("negative fencing token"))?;
-                Self::Created { fencing_token }
+                let run_id = run_id
+                    .and_then(|hex| u64::from_str_radix(&hex, 16).ok())
+                    .ok_or_else(|| ParsingError::from("malformed token run id"))?;
+                let sequence = sequence
+                    .and_then(|digits| digits.parse().ok())
+                    .ok_or_else(|| ParsingError::from("malformed token sequence"))?;
+                Self::Created {
+                    fencing_token: FencingToken::new(run_id, sequence),
+                }
             }
 
             "in_progress" => Self::InProgress { data },
