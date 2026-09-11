@@ -4,8 +4,10 @@
 //! The key-expiration uses native key TTL.
 //!
 //! The server must have AOF persistence enabled (`appendonly yes`) and eviction disabled
-//! (`maxmemory-policy noeviction`) because a silent eviction under memory pressure breaks
-//! the at-most-once guarantee.
+//! because a silent eviction under memory pressure breaks the at-most-once guarantee.
+//!
+//! The fencing tokens has an associated server ID, so a token issued before a restart or a
+//! failover never matches one issued after it.
 
 use std::fmt;
 use std::sync::LazyLock;
@@ -35,8 +37,7 @@ pub use self::error::ValkeyError;
 #[doc(inline)]
 use self::wire::WireEntry;
 
-/// Lua script for atomic key claiming. Returns `nil` on success
-/// or the existing entry bytes if the key is already taken.
+/// Lua script for atomic key claiming.
 static CLAIM_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
     let code = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/valkey/claim.lua"));
     Script::new(code)
