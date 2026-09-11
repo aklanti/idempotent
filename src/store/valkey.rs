@@ -1,4 +1,4 @@
-//! Valkey / Redis idempotency store.
+//! Valkey / Redis backed idempotency store.
 //!
 //! Claiming and completing are atomic via Lua scripts with no TOCTOU risk.
 //! The key-expiration uses native key TTL.
@@ -330,8 +330,10 @@ mod tests {
     use googletest::matchers::anything;
     use googletest::matchers::eq;
     use googletest::matchers::err;
+    use googletest::matchers::not;
     use googletest::matchers::ok;
     use googletest::matchers::pat;
+    use testcontainers::ContainerAsync;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::valkey::Valkey;
 
@@ -348,18 +350,46 @@ mod tests {
 
     async fn new_store() -> (ValkeyStore, impl Drop) {
         let container = Valkey::default().start().await.expect("Valkey to start");
+        let store = connect(&container).await;
+        (store, container)
+    }
+
+    /// Connects to the container, retrying while it comes up after a start or a restart.
+    async fn connect(container: &ContainerAsync<Valkey>) -> ValkeyStore {
         let port = container
             .get_host_port_ipv4(6379)
             .await
             .expect("to get container port");
         let client =
-            redis::Client::open(format!("redis://127.0.0.1:{port}")).expect("to connect to Valkey");
-        let store = ValkeyStore::with_client(client)
-            .prefix("test")
-            .try_build()
+            redis::Client::open(format!("redis://127.0.0.1:{port}")).expect("to parse the URL");
+        for _ in 0..50 {
+            let built = ValkeyStore::with_client(client.clone())
+                .prefix("test")
+                .try_build()
+                .await;
+            if let Ok(store) = built
+                && store.ping().await.is_ok()
+            {
+                return store;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("Valkey did not become reachable");
+    }
+
+    /// The stored server run id.
+    async fn server_run_id(store: &ValkeyStore) -> u64 {
+        let info: String = redis::cmd("INFO")
+            .arg("server")
+            .query_async(&mut store.conn.clone())
             .await
-            .expect("to create a store");
-        (store, container)
+            .expect("INFO server");
+        let run_id = info
+            .lines()
+            .find_map(|line| line.strip_prefix("run_id:"))
+            .expect("a run_id line")
+            .trim();
+        u64::from_str_radix(&run_id[..16], 16).expect("hex run id")
     }
 
     #[gtest]
@@ -455,5 +485,82 @@ mod tests {
                 })
             }))
         );
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn token_carries_server_run_id() {
+        let (store, _container) = new_store().await;
+        let key = IdempotencyKey::new("sankara").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
+
+        let Ok(InsertResult::Claimed { fencing_token }) = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+        else {
+            panic!("expected a fresh claim");
+        };
+
+        expect_that!(fencing_token.run_id, eq(server_run_id(&store).await));
+        expect_that!(fencing_token.sequence, eq(1));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn token_issued_before_restart_is_rejected_after_it() {
+        let container = Valkey::default().start().await.expect("Valkey to start");
+        let store = connect(&container).await;
+        let key = IdempotencyKey::new("achebe").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/charge", &[]);
+
+        let Ok(InsertResult::Claimed {
+            fencing_token: before,
+        }) = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+        else {
+            panic!("expected a fresh claim");
+        };
+
+        container.stop_with_timeout(None).await.expect("to stop");
+        container.start().await.expect("to start");
+        let store = connect(&container).await;
+        let mut conn = store.conn.clone();
+        redis::cmd("DEL")
+            .arg(store.prefixed_key(&key))
+            .exec_async(&mut conn)
+            .await
+            .expect("to drop the claim");
+        redis::cmd("SET")
+            .arg(store.counter_key())
+            .arg(before.sequence - 1)
+            .exec_async(&mut conn)
+            .await
+            .expect("to roll the counter back");
+
+        let Ok(InsertResult::Claimed {
+            fencing_token: after,
+        }) = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+        else {
+            panic!("expected the key to be free after the restart");
+        };
+        expect_that!(after.sequence, eq(before.sequence));
+        expect_that!(after.run_id, not(eq(before.run_id)));
+        expect_that!(after.run_id, eq(server_run_id(&store).await));
+
+        let response = CachedResponse {
+            status_code: 200,
+            metadata: Metadata::default(),
+            body: Bytes::from_static(b"ok"),
+        };
+        let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response, TTL);
+        let stale = store.complete(&key, completed.clone(), before).await;
+        expect_that!(stale, ok(eq(&FencedOutcome::FencingMismatch)));
+        let stale = store.touch(&key, before, TTL).await;
+        expect_that!(stale, ok(eq(&FencedOutcome::FencingMismatch)));
+        let live = store.complete(&key, completed, after).await;
+        expect_that!(live, ok(eq(&FencedOutcome::Applied)));
     }
 }
