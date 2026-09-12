@@ -81,7 +81,9 @@ For control over each step, `try_insert` returns a `ClaimGuard` to `touch` while
 use std::time::Duration;
 
 use idempotent::memory::MemoryStore;
-use idempotent::{IdempotencyKey, IdempotencyStore, OwnedClaimOutcome};
+use idempotent::IdempotencyKey;
+use idempotent::IdempotencyStore;
+use idempotent::OwnedClaimOutcome;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -113,7 +115,8 @@ use std::time::Duration;
 
 use idempotent::fingerprint;
 use idempotent::memory::MemoryStore;
-use idempotent::{IdempotencyKey, IdempotencyStore};
+use idempotent::IdempotencyKey;
+use idempotent::IdempotencyStore;
 
 #[derive(Hash)]
 struct IssueRequest {
@@ -182,8 +185,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Using the middleware
+
+With the `middleware` feature, `IdempotencyLayer` wraps any Tower service over `http` types, and with `axum` it goes straight into `Router::layer`. A request carrying an idempotency-key header runs once and replays after. A retry while the first request runs gets 409, and a key reused with a different body gets 400. Handlers run to completion in their own tasks, so a client that disconnects cannot cancel one mid side effect.
+
+```rust,no_run
+use axum::Router;
+use axum::routing::post;
+use idempotent::IdempotencyKey;
+use idempotent::memory::MemoryStore;
+use idempotent::middleware::IdempotencyLayer;
+
+async fn issue(key: IdempotencyKey) -> String {
+    format!("issued under {key}")
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let layer = IdempotencyLayer::new(MemoryStore::builder().try_build()?).scope(|parts| {
+        parts
+            .headers
+            .get("x-tenant")
+            .and_then(|tenant| tenant.to_str().ok())
+            .map(String::from)
+    });
+    let tracker = layer.tracker();
+    let app: Router = Router::new().route("/credentials", post(issue)).layer(layer);
+
+    // Serve `app`. Once the listener has stopped, drain the handlers still running.
+    tracker.close();
+    tracker.wait().await;
+    Ok(())
+}
+```
+
+Scope every key by the caller in a service with more than one client, or one client can replay another's response. Everything the handler returns is cached, failures included. A handler that rejected a request before doing anything marks its response `cache-control: no-store`, and the layer frees the key. The [middleware module docs][url-middleware] cover capacity, limits, and shutdown.
+
 ## Optional features
 
+- **middleware:** `IdempotencyLayer`, a Tower layer for HTTP services
+- **axum:** `IdempotencyRejection` as a response and `IdempotencyKey` as an extractor
 - **memory:** the in-memory store, for development or a single process
 - **valkey:** the Valkey/Redis store, using Lua scripts for atomic operations
 - **tracing:** instruments store operations with [`tracing`][url-tracing] spans and events
@@ -207,6 +248,7 @@ Unless otherwise noted, this project is licensed under the [Mozilla Public Licen
 [url-docs-store]: https://docs.rs/idempotent/latest/idempotent/trait.IdempotencyStore.html
 [badge-license]: https://img.shields.io/badge/License-MPL_2.0-blue.svg
 [url-license]: https://github.com/aklanti/idempotent/blob/main/LICENSE
+[url-middleware]: https://docs.rs/idempotent/latest/idempotent/middleware/index.html
 [url-serde-serialize]: https://docs.rs/serde/1/serde/trait.Serialize.html
 [url-serde-deserialize]: https://docs.rs/serde/1/serde/trait.Deserialize.html
 [url-tracing]: https://docs.rs/tracing/latest/tracing

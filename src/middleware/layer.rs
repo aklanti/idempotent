@@ -116,7 +116,35 @@ impl<S> Settings<S> {
     }
 }
 
-/// Wraps a service so that a request with an idempotency key runs once and replays after.
+/// Wraps a service so that a request with an idempotency key is handled once and replays after.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use idempotent::memory::MemoryStore;
+/// use idempotent::middleware::IdempotencyLayer;
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let layer = IdempotencyLayer::new(MemoryStore::builder().try_build()?)
+///     .scope(|parts| {
+///         parts
+///             .headers
+///             .get("x-tenant")
+///             .and_then(|tenant| tenant.to_str().ok())
+///             .map(String::from)
+///     })
+///     .max_in_flight(512);
+/// let tracker = layer.tracker();
+///
+/// // Serve with the layer. Once the listener has stopped, drain what is still running.
+/// tracker.close();
+/// tokio::time::timeout(Duration::from_secs(30), tracker.wait()).await?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct IdempotencyLayer<S> {
     settings: Settings<S>,
