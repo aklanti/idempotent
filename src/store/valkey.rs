@@ -16,6 +16,7 @@ use std::time::Duration;
 use redis::Client;
 use redis::Script;
 use redis::aio::ConnectionManager;
+use redis::aio::ConnectionManagerConfig;
 
 use self::claim::ClaimReply;
 use crate::FencedOutcome;
@@ -62,6 +63,9 @@ static TOUCH_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
     Script::new(code)
 });
 
+/// The default connection and response timeout, five seconds.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// An [`IdempotencyStore`] backed by Valkey or Redis.
 #[derive(Clone)]
 pub struct ValkeyStore {
@@ -105,11 +109,23 @@ impl ValkeyStore {
         Ok(())
     }
 
+    /// Starts building a store that connects to `url` without a key prefix.
+    pub fn with_url(url: impl Into<String>) -> ValkeyStoreBuilder {
+        ValkeyStoreBuilder {
+            source: Source::Url(url.into()),
+            prefix: None,
+            connection_timeout: DEFAULT_TIMEOUT,
+            response_timeout: DEFAULT_TIMEOUT,
+        }
+    }
+
     /// Starts building a store backed with the given client and no key prefix.
     pub const fn with_client(client: Client) -> ValkeyStoreBuilder {
         ValkeyStoreBuilder {
             source: Source::Client(client),
             prefix: None,
+            connection_timeout: DEFAULT_TIMEOUT,
+            response_timeout: DEFAULT_TIMEOUT,
         }
     }
 
@@ -118,6 +134,8 @@ impl ValkeyStore {
         ValkeyStoreBuilder {
             source: Source::Manager(conn),
             prefix: None,
+            connection_timeout: DEFAULT_TIMEOUT,
+            response_timeout: DEFAULT_TIMEOUT,
         }
     }
 }
@@ -279,18 +297,17 @@ fn decode_sentinel(value: i64) -> Result<FencedOutcome, ValkeyError> {
         .ok_or_else(|| ValkeyError::Decode(format!("unexpected fenced outcome {value}").into()))
 }
 
-/// Builder for [`ValkeyStore`].
+/// A [`ValkeyStore`] builder.
 pub struct ValkeyStoreBuilder {
     source: Source,
     prefix: Option<String>,
+    connection_timeout: Duration,
+    response_timeout: Duration,
 }
 
 /// The connection source the builder resolves at build time.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the builder is transient; boxing the client would forbid const construction"
-)]
 enum Source {
+    Url(String),
     Client(Client),
     Manager(ConnectionManager),
 }
@@ -304,19 +321,42 @@ impl ValkeyStoreBuilder {
         self
     }
 
-    /// Builds the store, resolving a client to a connection manager when needed.
+    /// Sets how long a connection attempt may take.
+    pub const fn connection_timeout(mut self, timeout: Duration) -> Self {
+        self.connection_timeout = timeout;
+        self
+    }
+
+    /// Sets how long a command may take to answer.
+    pub const fn response_timeout(mut self, timeout: Duration) -> Self {
+        self.response_timeout = timeout;
+        self
+    }
+
+    /// Builds the store, connecting when it was given a URL or a client.
+    ///
+    /// A manager passed to [`ValkeyStore::with_connection_manager`] is used as it is, with the
+    /// timeouts it was created with.
     ///
     /// # Errors
     ///
-    /// Returns an error if the prefix contains a reserved separator or a control character, or
-    /// if the connection manager cannot be created.
+    /// Returns an error if the prefix contains a reserved separator or a control character, if
+    /// the URL cannot be parsed, or if the connection manager cannot be created.
     pub async fn try_build(self) -> Result<ValkeyStore, ValkeyError> {
         let prefix = self.prefix.unwrap_or_default();
         if prefix.chars().any(IdempotencyKey::is_reserved) {
             return Err(ValkeyError::InvalidPrefix(prefix));
         }
+        let config = ConnectionManagerConfig::new()
+            .set_connection_timeout(Some(self.connection_timeout))
+            .set_response_timeout(Some(self.response_timeout));
         let conn = match self.source {
-            Source::Client(client) => client.get_connection_manager().await?,
+            Source::Url(url) => {
+                let client =
+                    Client::open(url).map_err(|error| ValkeyError::InvalidUrl(Box::new(error)))?;
+                client.get_connection_manager_with_config(config).await?
+            }
+            Source::Client(client) => client.get_connection_manager_with_config(config).await?,
             Source::Manager(conn) => conn,
         };
         Ok(ValkeyStore { prefix, conn })
@@ -626,5 +666,26 @@ mod tests {
 
         let rejected = store.touch(&key, fencing_token, TTL).await;
         expect_that!(rejected, ok(eq(&FencedOutcome::KeyExpired)));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn with_url_builds_or_rejects_the_url() {
+        let container = Valkey::default().start().await.expect("Valkey to start");
+        let host = container.get_host().await.expect("to get container host");
+        let port = container
+            .get_host_port_ipv4(6379)
+            .await
+            .expect("to get container port");
+
+        let store = ValkeyStore::with_url(format!("redis://{host}:{port}"))
+            .prefix("test")
+            .try_build()
+            .await
+            .expect("to build from a url");
+        expect_that!(store.ping().await, ok(anything()));
+
+        let rejected = ValkeyStore::with_url("not a url").try_build().await;
+        expect_that!(rejected, err(pat!(ValkeyError::InvalidUrl(anything()))));
     }
 }

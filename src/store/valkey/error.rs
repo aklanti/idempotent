@@ -13,6 +13,9 @@ pub enum ValkeyError {
     /// The key prefix is invalid.
     #[error("service-name prefix {0:?} contains a reserved separator (':' or '/')")]
     InvalidPrefix(String),
+    /// The connection URL could not be parsed.
+    #[error("invalid connection url")]
+    InvalidUrl(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl From<RedisError> for ValkeyError {
