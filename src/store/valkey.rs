@@ -306,6 +306,10 @@ pub struct ValkeyStoreBuilder {
 }
 
 /// The connection source the builder resolves at build time.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the builder is made once and consumed by try_build; its size never matters"
+)]
 enum Source {
     Url(String),
     Client(Client),
