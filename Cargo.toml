@@ -11,7 +11,7 @@ keywords = ["idempotency", "idempotent", "api", "retry", "deduplication"]
 categories = ["web-programming", "data-structures"]
 
 [package.metadata.docs.rs]
-features = ["axum", "memory", "middleware", "serde", "tonic", "tracing", "uuid", "valkey"]
+features = ["axum", "memory", "middleware", "serde", "tracing", "uuid", "valkey"]
 
 [features]
 axum = ["dep:axum", "middleware"]
@@ -26,7 +26,6 @@ middleware = [
     "dep:tower",
 ]
 serde = ["dep:serde", "bytes/serde", "uuid?/serde"]
-tonic = ["dep:tonic", "middleware"]
 tracing = ["dep:tracing"]
 uuid = ["dep:uuid"]
 valkey = ["dep:redis", "dep:postcard", "serde"]
@@ -43,7 +42,6 @@ serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
 tokio-util = { version = "0.7", features = ["rt"], optional = true }
-tonic = { version = "0.14", default-features = false, optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
 tracing = { version = "0.1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }

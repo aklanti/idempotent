@@ -33,7 +33,11 @@ A wallet asks an issuer for a credential and retries when the answer is lost. Th
 use std::time::Duration;
 
 use idempotent::memory::MemoryStore;
-use idempotent::{CachedResponse, ExecutionOutcome, IdempotencyKey, IdempotencyStore, Metadata};
+use idempotent::CachedResponse;
+use idempotent::ExecutionOutcome;
+use idempotent::IdempotencyKey;
+use idempotent::IdempotencyStore;
+use idempotent::Metadata;
 
 /// Signs the credential and returns it as the response to cache.
 async fn issue_credential() -> CachedResponse {
