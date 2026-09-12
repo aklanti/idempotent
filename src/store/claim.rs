@@ -173,6 +173,36 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
 }
 
 /// A builder for an owned claim.
+///
+/// # Examples
+///
+/// ```
+/// # use std::time::Duration;
+/// # use idempotent::{CachedResponse, ExecutionOutcome, IdempotencyKey, IdempotencyStore, Metadata};
+/// # use idempotent::memory::MemoryStore;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = MemoryStore::builder().try_build()?;
+/// let key = IdempotencyKey::new("offer-8f21")?;
+///
+/// // The future owns its store and key, so it can run on another task.
+/// let outcome = tokio::spawn(
+///     store
+///         .claim_owned(key, Duration::from_secs(30))
+///         .fingerprint("POST /credentials/issue", b"{}")
+///         .execute_or_replay(Duration::from_secs(60), |_token| async {
+///             Ok(CachedResponse {
+///                 status_code: 201,
+///                 metadata: Metadata::new(),
+///                 body: b"issued".to_vec().into(),
+///             })
+///         }),
+/// )
+/// .await??;
+/// assert!(matches!(outcome, ExecutionOutcome::Executed(_)));
+/// # Ok(())
+/// # }
+/// ```
 pub struct OwnedClaimBuilder<S: IdempotencyStore + Clone, State = NoFingerprint> {
     store: S,
     key: IdempotencyKey,

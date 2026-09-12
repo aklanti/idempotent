@@ -120,6 +120,20 @@ impl ExistingEntry {
     ///
     /// A completed entry with the same fingerprint replays its response, a processing entry
     /// with the same fingerprint is in flight, and any other entry is a mismatch.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::time::Duration;
+    /// # use idempotent::{IdempotencyEntry, ReplayOutcome};
+    /// # use idempotent::entry::ExistingEntry;
+    /// # use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
+    /// let fingerprint = DefaultFingerprintStrategy.compute("POST /issue_credential", b"{}");
+    /// let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
+    ///
+    /// let existing = ExistingEntry::Processing(entry);
+    /// assert_eq!(existing.replay(fingerprint), ReplayOutcome::InFlight);
+    /// ```
     pub fn replay(self, fingerprint: Fingerprint) -> ReplayOutcome {
         match self {
             Self::Completed(entry) if entry.fingerprint == fingerprint => {

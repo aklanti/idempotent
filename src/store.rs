@@ -54,6 +54,31 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     ///
     /// The builder and the futures it returns own a clone of the store and the key, so they
     /// can move across tasks and runtimes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::time::Duration;
+    /// # use idempotent::{IdempotencyKey, IdempotencyStore, OwnedClaimOutcome};
+    /// # use idempotent::memory::MemoryStore;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = MemoryStore::builder().try_build()?;
+    /// let key = IdempotencyKey::new("offer-8f21")?;
+    ///
+    /// let outcome = store
+    ///     .claim_owned(key, Duration::from_secs(30))
+    ///     .fingerprint("POST /credentials/issue", b"{}")
+    ///     .try_insert()
+    ///     .await?;
+    /// let OwnedClaimOutcome::Claimed(guard) = outcome else {
+    ///     return Ok(());
+    /// };
+    /// // Drop the guard to free the key, or leave it to the lease.
+    /// guard.leave();
+    /// # Ok(())
+    /// # }
+    /// ```
     fn claim_owned(
         &self,
         key: IdempotencyKey,

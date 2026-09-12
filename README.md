@@ -71,7 +71,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The first request for the offer claims its key for 30 seconds, the processing lease, while the credential is signed. The signed credential is cached for a day, the completed lease, so a retry within that day gets the same credential rather than a second one. A retry while the first request is still signing gets `InFlight`, and a retry with a different request body gets `FingerprintMismatch`. If signing fails, the claim is left to expire so a later retry tries again.
 
-For control over each step, `try_insert` returns a `ClaimGuard` to `touch` while the work runs and to `complete` with the response.
+For control over each step, `try_insert` returns a `ClaimGuard` to `touch` while the work runs and to `complete` with the response. For a side effect slower than the processing lease, `keep_alive` on the builder renews the lease while it runs, up to a ceiling; past the ceiling the lease lapses and the completion reports `Fenced`.
+
+### Owned claims
+
+`claim_owned` returns a builder whose futures own a clone of the store and the key, so a claim can live in a struct, move into a spawned task, or run on another runtime. Dropping an owned claim mid side effect frees the key at once; a failed side effect leaves it to expire, as on the borrowing path; `leave` keeps it deliberately.
+
+```rust
+use std::time::Duration;
+
+use idempotent::memory::MemoryStore;
+use idempotent::{IdempotencyKey, IdempotencyStore, OwnedClaimOutcome};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let store = MemoryStore::builder().try_build()?;
+    let key = IdempotencyKey::new("offer-8f21")?;
+
+    let claimed = tokio::spawn(async move {
+        store
+            .claim_owned(key, Duration::from_secs(30))
+            .fingerprint("POST /credentials/issue", b"{}")
+            .try_insert()
+            .await
+    })
+    .await??;
+
+    if let OwnedClaimOutcome::Claimed(guard) = claimed {
+        guard.leave();
+    }
+    Ok(())
+}
+```
+
+### Fingerprinting a typed request
+
+The fingerprint covers the operation and the request bytes. When the request is already a value, `fingerprint::body` hashes it through `Hash`, so field order and formatting do not matter:
+
+```rust
+use std::time::Duration;
+
+use idempotent::fingerprint;
+use idempotent::memory::MemoryStore;
+use idempotent::{IdempotencyKey, IdempotencyStore};
+
+#[derive(Hash)]
+struct IssueRequest {
+    holder: String,
+    credential_type: String,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let store = MemoryStore::builder().try_build()?;
+    let key = IdempotencyKey::new("cred-offer-123")?;
+    let request = IssueRequest {
+        holder: "did:web:alice.example".to_owned(),
+        credential_type: "UniversityDegreeCredential".to_owned(),
+    };
+
+    let _claim = store
+        .claim(&key, Duration::from_secs(30))
+        .fingerprint("POST /credentials/issue", &fingerprint::body(&request))
+        .try_insert()
+        .await?;
+    Ok(())
+}
+```
 
 ### How a retry is answered
 
@@ -96,6 +162,25 @@ If the process dies after the side effect ran but before the completion was stor
 ### Running on Valkey
 
 Enable AOF persistence (`appendonly yes`) and disable eviction (`maxmemory-policy noeviction`): an evicted key loses its claim, and the retry runs again. Use a single node. A failover to a replica changes the server's run id, so attempts started on the old primary are fenced after promotion, but claims that had not replicated are gone with their keys. With `appendfsync everysec` a crash can still lose the last second of claims; `appendfsync always` closes that window at one fsync per claim.
+
+`with_url` builds a store from a connection string; `with_client` and `with_connection_manager` take a redis client or a manager the application already holds. Every connection attempt and every command is bounded, five seconds each by default:
+
+```rust,no_run
+use std::time::Duration;
+
+use idempotent::valkey::ValkeyStore;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _store = ValkeyStore::with_url("redis://127.0.0.1:6379")
+        .prefix("issuer")
+        .connection_timeout(Duration::from_secs(2))
+        .response_timeout(Duration::from_secs(2))
+        .try_build()
+        .await?;
+    Ok(())
+}
+```
 
 ## Optional features
 
