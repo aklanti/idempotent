@@ -272,7 +272,7 @@ mod tests {
             .try_build()
             .expect("build memory store");
         let key = IdempotencyKey::new("dropped").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("POST /charges", b"{}");
+        let fingerprint = DefaultFingerprintStrategy.compute(&"POST /charges".into(), b"{}");
 
         let outcome = store
             .claim_owned(key.clone(), TTL)

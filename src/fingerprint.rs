@@ -1,6 +1,7 @@
 //! Request fingerprints and the strategies that compute them.
 
 use std::hash::Hash;
+use std::ops::Deref;
 
 use xxhash_rust::xxh3;
 
@@ -59,17 +60,56 @@ pub fn body<T: Hash + ?Sized>(value: &T) -> [u8; 16] {
     hasher.digest128().to_le_bytes()
 }
 
+/// The request an idempotency key protects: the method, the path, and the query.
+///
+/// The fingerprint hashes the operation and the body, so a key reused for a different
+/// operation is a mismatch. Any string converts into one; `"POST /credentials/issue"` is the
+/// shape the middleware builds from a request head.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Operation(String);
+
+impl Deref for Operation {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for Operation {
+    fn from(operation: &str) -> Self {
+        Self(operation.to_owned())
+    }
+}
+
+impl From<String> for Operation {
+    fn from(operation: String) -> Self {
+        Self(operation)
+    }
+}
+
+#[cfg(feature = "middleware")]
+impl From<&http::request::Parts> for Operation {
+    fn from(parts: &http::request::Parts) -> Self {
+        let target = parts
+            .uri
+            .path_and_query()
+            .map_or(parts.uri.path(), http::uri::PathAndQuery::as_str);
+        Self(format!("{} {target}", parts.method))
+    }
+}
+
 /// Trait for computing request fingerprints.
 pub trait FingerprintStrategy: Send + Sync + 'static {
     /// Computes a fingerprint from `operation` and `body`.
-    fn compute(&self, operation: &str, body: &[u8]) -> Fingerprint;
+    fn compute(&self, operation: &Operation, body: &[u8]) -> Fingerprint;
 }
 
 /// Default strategy using xxHash3.
 pub struct DefaultFingerprintStrategy;
 
 impl FingerprintStrategy for DefaultFingerprintStrategy {
-    fn compute(&self, operation: &str, body: &[u8]) -> Fingerprint {
+    fn compute(&self, operation: &Operation, body: &[u8]) -> Fingerprint {
         let mut hasher = xxh3::Xxh3::new();
 
         hasher.update(&(operation.len() as u64).to_le_bytes());
@@ -91,8 +131,19 @@ mod tests {
     #[gtest]
     fn field_sepration_prevent_collision() {
         let strat = DefaultFingerprintStrategy;
-        let f1 = strat.compute("GET/ab", b"");
-        let f2 = strat.compute("GET", b"/ab");
+        let f1 = strat.compute(&"GET/ab".into(), b"");
+        let f2 = strat.compute(&"GET".into(), b"/ab");
         expect_that!(f1, not(eq(f2)));
+    }
+
+    #[cfg(feature = "middleware")]
+    #[test]
+    fn operation_covers_method_path_and_query() {
+        let request = http::Request::post("/charges?amount=1")
+            .body(())
+            .expect("valid request");
+        let (parts, ()) = request.into_parts();
+        let operation = Operation::from(&parts);
+        assert_eq!(&*operation, "POST /charges?amount=1");
     }
 }

@@ -27,6 +27,8 @@ pub use self::fencing_token::FencingToken;
 #[doc(inline)]
 pub use self::fingerprint::Fingerprint;
 #[doc(inline)]
+pub use self::fingerprint::Operation;
+#[doc(inline)]
 pub use self::guard::ClaimGuard;
 #[doc(inline)]
 pub use self::guard::OwnedClaimGuard;

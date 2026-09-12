@@ -309,7 +309,7 @@ mod tests {
     fn insert_vacant_return_a_claim_with_fencing_token() {
         let mut store = MemoryStoreActor::new();
         let key = IdempotencyKey::new("chimamanda").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
         let result = store.try_insert(key, entry);
         expect_that!(
@@ -324,7 +324,7 @@ mod tests {
     fn insert_existing_processing_returns_existing_processing() {
         let mut store = MemoryStoreActor::new();
         let key = IdempotencyKey::new("chimamanda").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
 
         let first = store.try_insert(key.clone(), entry.clone());
@@ -342,7 +342,7 @@ mod tests {
     fn insert_existing_completed_return_existing_completed() {
         let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
         let response = CachedResponse {
             status_code: 200,
@@ -367,7 +367,10 @@ mod tests {
 
         let second = store.try_insert(
             key,
-            IdempotencyEntry::new(DefaultFingerprintStrategy.compute("/submit", &[]), TTL),
+            IdempotencyEntry::new(
+                DefaultFingerprintStrategy.compute(&"/submit".into(), &[]),
+                TTL,
+            ),
         );
         expect_that!(
             second,
@@ -380,7 +383,7 @@ mod tests {
     fn insert_on_expired_key_claims_entry() {
         let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
         let entry = IdempotencyEntry::new(fingerprint, Duration::ZERO);
 
         let first = store.try_insert(key.clone(), entry);
@@ -407,7 +410,7 @@ mod tests {
     fn complete_with_mismatched_fencing_token_is_noop() {
         let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
         let response = CachedResponse {
             status_code: 200,
@@ -440,7 +443,7 @@ mod tests {
     fn remove_allows_reinsert() {
         let mut store = MemoryStoreActor::default();
         let key = IdempotencyKey::new("lumumba").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
 
         let first = store.try_insert(key.clone(), entry);
@@ -472,7 +475,7 @@ mod tests {
         let mut store = MemoryStoreActor::default();
         let expired = IdempotencyKey::new("lumumba").expect("valid key");
         let live = IdempotencyKey::new("achebe").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
         store.try_insert(
             expired.clone(),
             IdempotencyEntry::new(fingerprint, Duration::ZERO),
@@ -497,7 +500,7 @@ mod tests {
                 .expect("build memory store"),
         );
         let key = IdempotencyKey::new("makeba").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/force", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/force".into(), &[]);
 
         let mut handles = Vec::with_capacity(10);
 
@@ -536,7 +539,7 @@ mod tests {
                 .expect("build memory store"),
         );
         let key = IdempotencyKey::new("sankara").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/one-africa", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/one-africa".into(), &[]);
         let response = CachedResponse {
             status_code: 200,
             metadata: Metadata::default(),
@@ -583,7 +586,7 @@ mod tests {
     fn complete_after_complete_is_rejected() {
         let mut store = MemoryStoreActor::new();
         let key = IdempotencyKey::new("chimamanda").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
         let InsertResult::Claimed { fencing_token } =
             store.try_insert(key.clone(), IdempotencyEntry::new(fingerprint, TTL))
         else {
@@ -609,14 +612,14 @@ mod tests {
     fn complete_with_foreign_fingerprint_is_rejected() {
         let mut store = MemoryStoreActor::new();
         let key = IdempotencyKey::new("chimamanda").expect("valid key");
-        let claimed = DefaultFingerprintStrategy.compute("/submit", b"original");
+        let claimed = DefaultFingerprintStrategy.compute(&"/submit".into(), b"original");
         let InsertResult::Claimed { fencing_token } =
             store.try_insert(key.clone(), IdempotencyEntry::new(claimed, TTL))
         else {
             panic!("expected a fresh claim");
         };
 
-        let foreign = DefaultFingerprintStrategy.compute("/submit", b"different");
+        let foreign = DefaultFingerprintStrategy.compute(&"/submit".into(), b"different");
         let completed = IdempotencyEntry::new(foreign, TTL).complete(response(b"ok"), TTL);
         let rejected = store.complete(key.clone(), completed, fencing_token);
         expect_that!(rejected, eq(FencedOutcome::FingerprintMismatch));
@@ -669,7 +672,7 @@ mod tests {
         expect_that!(store.len().await, ok(eq(&0)));
         expect_that!(store.is_empty().await, ok(eq(&true)));
 
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
         let first = IdempotencyKey::new("achebe").expect("valid key");
         let second = IdempotencyKey::new("soyinka").expect("valid key");
         store

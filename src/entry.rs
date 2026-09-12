@@ -41,7 +41,7 @@ impl IdempotencyEntry<Processing> {
     /// # use std::time::Duration;
     /// # use idempotent::{CachedResponse, IdempotencyEntry, Metadata};
     /// # use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
-    /// let fingerprint = DefaultFingerprintStrategy.compute("/get", &[2]);
+    /// let fingerprint = DefaultFingerprintStrategy.compute(&"/get".into(), &[2]);
     /// let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
     /// let response = CachedResponse {
     ///     status_code: 200,
@@ -128,7 +128,7 @@ impl ExistingEntry {
     /// # use idempotent::{IdempotencyEntry, ReplayOutcome};
     /// # use idempotent::entry::ExistingEntry;
     /// # use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
-    /// let fingerprint = DefaultFingerprintStrategy.compute("POST /issue_credential", b"{}");
+    /// let fingerprint = DefaultFingerprintStrategy.compute(&"POST /issue_credential".into(), b"{}");
     /// let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
     ///
     /// let existing = ExistingEntry::Processing(entry);

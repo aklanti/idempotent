@@ -463,7 +463,7 @@ mod tests {
         let (store, _container) = new_store().await;
 
         let key = IdempotencyKey::new("sankara").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/list".into(), &[]);
         let entry = IdempotencyEntry::new(fingerprint, TTL);
         let response = CachedResponse {
             status_code: 200,
@@ -501,7 +501,7 @@ mod tests {
     async fn token_carries_server_run_id() {
         let (store, _container) = new_store().await;
         let key = IdempotencyKey::new("sankara").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/list".into(), &[]);
 
         let Ok(InsertResult::Claimed { fencing_token }) = store
             .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
@@ -532,7 +532,7 @@ mod tests {
         let container = Valkey::default().start().await.expect("Valkey to start");
         let store = connect(&container).await;
         let key = IdempotencyKey::new("achebe").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/charge", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/charge".into(), &[]);
 
         let Ok(InsertResult::Claimed {
             fencing_token: before,
@@ -590,7 +590,7 @@ mod tests {
     async fn complete_after_complete_is_rejected() {
         let (store, _container) = new_store().await;
         let key = IdempotencyKey::new("sankara").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/list".into(), &[]);
         let Ok(InsertResult::Claimed { fencing_token }) = store
             .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
             .await
@@ -620,7 +620,7 @@ mod tests {
     async fn complete_with_foreign_fingerprint_is_rejected() {
         let (store, _container) = new_store().await;
         let key = IdempotencyKey::new("sankara").expect("valid key");
-        let claimed = DefaultFingerprintStrategy.compute("/list", b"original");
+        let claimed = DefaultFingerprintStrategy.compute(&"/list".into(), b"original");
         let Ok(InsertResult::Claimed { fencing_token }) = store
             .try_insert(&key, IdempotencyEntry::new(claimed, TTL))
             .await
@@ -628,7 +628,7 @@ mod tests {
             panic!("expected a fresh claim");
         };
 
-        let foreign = DefaultFingerprintStrategy.compute("/list", b"different");
+        let foreign = DefaultFingerprintStrategy.compute(&"/list".into(), b"different");
         let completed = IdempotencyEntry::new(foreign, TTL).complete(response(b"ok"), TTL);
         let rejected = store.complete(&key, completed, fencing_token).await;
         expect_that!(rejected, ok(eq(&FencedOutcome::FingerprintMismatch)));
@@ -649,7 +649,7 @@ mod tests {
     async fn touch_after_complete_is_rejected() {
         let (store, _container) = new_store().await;
         let key = IdempotencyKey::new("sankara").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/list".into(), &[]);
         let Ok(InsertResult::Claimed { fencing_token }) = store
             .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
             .await

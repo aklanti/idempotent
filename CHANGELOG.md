@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `ExistingEntry::replay` and `ReplayOutcome`, the answer to a retry from the entry that holds the key
 - Add `ExecutionError::Completion`, which carries the response when the store fails after the side effect ran
 - Add `keep_alive` on both claim builders, renewing the processing lease while the side effect runs up to a ceiling
+- Add `Operation`, the method, path, and query a fingerprint hashes; `FingerprintStrategy::compute` takes one, and `fingerprint` and `fingerprint_with` accept anything that converts into it
 
 ## [0.3.0](https://github.com/aklanti/idempotent/compare/v0.2.0...v0.3.0) - 2026-03-07
 

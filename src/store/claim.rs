@@ -16,6 +16,7 @@ use crate::entry::ReplayOutcome;
 use crate::fencing_token::FencingToken;
 use crate::fingerprint::DefaultFingerprintStrategy;
 use crate::fingerprint::FingerprintStrategy;
+use crate::fingerprint::Operation;
 
 /// The state of the builder without the fingerprint.
 pub struct NoFingerprint;
@@ -50,7 +51,7 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, NoFingerprint> {
     /// Fingerprints the request with the default strategy.
     pub fn fingerprint(
         self,
-        operation: &str,
+        operation: impl Into<Operation>,
         body: &[u8],
     ) -> ClaimBuilder<'store, S, WithFingerprint> {
         self.fingerprint_with(&DefaultFingerprintStrategy, operation, body)
@@ -60,10 +61,10 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, NoFingerprint> {
     pub fn fingerprint_with(
         self,
         strategy: &dyn FingerprintStrategy,
-        operation: &str,
+        operation: impl Into<Operation>,
         body: &[u8],
     ) -> ClaimBuilder<'store, S, WithFingerprint> {
-        let fingerprint = strategy.compute(operation, body);
+        let fingerprint = strategy.compute(&operation.into(), body);
         ClaimBuilder {
             store: self.store,
             key: self.key,
@@ -225,7 +226,7 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, NoFingerprint> {
     /// Fingerprints the request with the default strategy.
     pub fn fingerprint(
         self,
-        operation: &str,
+        operation: impl Into<Operation>,
         body: &[u8],
     ) -> OwnedClaimBuilder<S, WithFingerprint> {
         self.fingerprint_with(&DefaultFingerprintStrategy, operation, body)
@@ -235,10 +236,10 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, NoFingerprint> {
     pub fn fingerprint_with(
         self,
         strategy: &dyn FingerprintStrategy,
-        operation: &str,
+        operation: impl Into<Operation>,
         body: &[u8],
     ) -> OwnedClaimBuilder<S, WithFingerprint> {
-        let fingerprint = strategy.compute(operation, body);
+        let fingerprint = strategy.compute(&operation.into(), body);
         OwnedClaimBuilder {
             store: self.store,
             key: self.key,
