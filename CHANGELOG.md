@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking changes
 
 - Rename `IdempotencyError` to `Error`, with `EmptyKey`, `KeyTooLong`, `InvalidKey`, `EmptyScope`, and `InvalidScope` in place of `InvalidKey(String)`
-- Restrict `IdempotencyKey` to visible ASCII without `:` or `/`, the separators of a store prefix and of a scope, and drop its serde derives
+- Reject a control character, `:`, or `/` in an `IdempotencyKey`, the separators of a store prefix and of a scope, and drop its serde derives
 - Remove `IdempotencyConfig`; the leases are arguments of `claim` and `complete`, and the fingerprint strategy an argument of `fingerprint_with`
 - Drop `async-trait` from `IdempotencyStore` for `impl Future` return types; `complete` and `remove` return a `FencedOutcome`, `remove` takes the fencing token, and the trait gains `touch` and `purge`
 - Take the fencing token out of the entry: `Processing` is a unit state, `IdempotencyEntry::fencing_token` and `fingerprint_matches` are gone, and `InsertResult::Claimed` carries the token

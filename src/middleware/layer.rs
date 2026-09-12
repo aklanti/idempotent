@@ -464,9 +464,16 @@ where
     if declines_caching(response.headers()) {
         outcome("declined");
         match settings.store.remove(&key, guard.fencing_token()).await {
-            Ok(_) => {
+            Ok(FencedOutcome::Applied) => {
                 #[cfg(feature = "tracing")]
                 tracing::info!("handler declined caching, claim released");
+            }
+            Ok(_rejection) => {
+                #[cfg(feature = "tracing")]
+                tracing::warn!(
+                    rejection = ?_rejection,
+                    "handler declined caching, but the claim was no longer held"
+                );
             }
             Err(error) => store_failed("release", &error),
         }

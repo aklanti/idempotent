@@ -24,7 +24,7 @@ pub enum FencedOutcome {
     Applied,
     /// The supplied and expected fencing token do not match.
     FencingMismatch,
-    /// The idempotency key has expired.
+    /// No live claim holds the key. It expired, was removed, or is already completed.
     KeyExpired,
     /// The completing request's fingerprint does not match the claimed request.
     ///
