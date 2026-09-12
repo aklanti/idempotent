@@ -101,8 +101,9 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
     /// The side effect has run but its response was not cached.
     ///
     /// Dropping the returned future before it completes leaves the claim in place until the
-    /// processing TTL expires. For a claim that frees itself when dropped, use
-    /// [`claim_owned`](IdempotencyStore::claim_owned).
+    /// processing TTL expires. For a future that frees the claim when dropped, use
+    /// [`claim_owned`](IdempotencyStore::claim_owned); a failed side effect leaves the claim
+    /// to expire on both paths.
     ///
     /// # Errors
     ///
@@ -147,6 +148,135 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
     }
 }
 
+/// A builder for an owned claim.
+pub struct OwnedClaimBuilder<S: IdempotencyStore + Clone, State = NoFingerprint> {
+    store: S,
+    key: IdempotencyKey,
+    processing_ttl: Duration,
+    state: State,
+}
+
+impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, NoFingerprint> {
+    pub(crate) const fn new(store: S, key: IdempotencyKey, processing_ttl: Duration) -> Self {
+        Self {
+            store,
+            key,
+            processing_ttl,
+            state: NoFingerprint,
+        }
+    }
+
+    /// Fingerprints the request with the default strategy.
+    pub fn fingerprint(
+        self,
+        operation: &str,
+        body: &[u8],
+    ) -> OwnedClaimBuilder<S, WithFingerprint> {
+        self.fingerprint_with(&DefaultFingerprintStrategy, operation, body)
+    }
+
+    /// Fingerprints the request with a custom strategy.
+    pub fn fingerprint_with(
+        self,
+        strategy: &dyn FingerprintStrategy,
+        operation: &str,
+        body: &[u8],
+    ) -> OwnedClaimBuilder<S, WithFingerprint> {
+        let fingerprint = strategy.compute(operation, body);
+        OwnedClaimBuilder {
+            store: self.store,
+            key: self.key,
+            processing_ttl: self.processing_ttl,
+            state: WithFingerprint(fingerprint),
+        }
+    }
+}
+
+impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, WithFingerprint> {
+    /// Claims the key, returning an [`OwnedClaimGuard`] on success or the entry that already
+    /// exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store operation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if polled outside a Tokio runtime.
+    pub async fn try_insert(self) -> Result<OwnedClaimOutcome<S>, S::Error> {
+        let WithFingerprint(fingerprint) = self.state;
+        let entry = IdempotencyEntry::new(fingerprint, self.processing_ttl);
+        let outcome = match self.store.try_insert(&self.key, entry.clone()).await? {
+            InsertResult::Claimed { fencing_token } => OwnedClaimOutcome::Claimed(
+                OwnedClaimGuard::new(self.store, self.key, fencing_token, entry),
+            ),
+            InsertResult::Exists(existing) => OwnedClaimOutcome::Exists {
+                existing,
+                fingerprint,
+            },
+        };
+        Ok(outcome)
+    }
+
+    /// Claims the key and runs the side effect, or replays the cached response on a matching
+    /// retry.
+    ///
+    /// Behaves as [`ClaimBuilder::execute_or_replay`] with the difference that the returned future
+    /// owns its store and key, so it can move across tasks and runtimes, and dropping it while
+    /// the side effect runs frees the claim at once.
+    ///
+    /// When the side effect fails, the claim is left to expire, as on the borrowing path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the side effect fails, or if a store operation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if polled outside a Tokio runtime.
+    pub async fn execute_or_replay<F, Fut>(
+        self,
+        completed_ttl: Duration,
+        side_effect: F,
+    ) -> Result<ExecutionOutcome, ExecutionError<S::Error>>
+    where
+        F: FnOnce(FencingToken) -> Fut,
+        Fut: Future<Output = Result<CachedResponse, Box<dyn std::error::Error + Send + Sync>>>,
+    {
+        #[cfg(feature = "tracing")]
+        let key = self.key.clone();
+        match self.try_insert().await.map_err(ExecutionError::Store)? {
+            OwnedClaimOutcome::Claimed(guard) => {
+                let response = match side_effect(guard.fencing_token()).await {
+                    Ok(response) => response,
+                    Err(error) => {
+                        guard.leave();
+                        return Err(ExecutionError::SideEffect(error));
+                    }
+                };
+                let verdict = guard
+                    .complete(response.clone(), completed_ttl)
+                    .await
+                    .map_err(ExecutionError::Store)?;
+                let outcome = ExecutionOutcome::from_completion(verdict, response);
+                #[cfg(feature = "tracing")]
+                if let ExecutionOutcome::Fenced { rejection, .. } = &outcome {
+                    tracing::warn!(
+                        key = %key,
+                        ?rejection,
+                        "completion rejected after the side effect ran"
+                    );
+                }
+                Ok(outcome)
+            }
+            OwnedClaimOutcome::Exists {
+                existing,
+                fingerprint,
+            } => Ok(replay_outcome(existing, fingerprint)),
+        }
+    }
+}
+
 /// The outcome of a borrowed claim.
 pub enum ClaimOutcome<'store, S: IdempotencyStore> {
     /// The key was claimed.
@@ -159,7 +289,7 @@ pub enum ClaimOutcome<'store, S: IdempotencyStore> {
         fingerprint: Fingerprint,
     },
 }
-/// Owned [`ClaimOutcome`] returned by `claim_owned`.
+/// Owned [`ClaimOutcome`] returned by [`OwnedClaimBuilder::try_insert`].
 pub enum OwnedClaimOutcome<S: IdempotencyStore + Clone> {
     /// The key was claimed.
     Claimed(OwnedClaimGuard<S>),
@@ -172,7 +302,7 @@ pub enum OwnedClaimOutcome<S: IdempotencyStore + Clone> {
     },
 }
 
-/// Result of [`ClaimBuilder::execute_or_replay`].
+/// Result of [`ClaimBuilder::execute_or_replay`] and [`OwnedClaimBuilder::execute_or_replay`].
 #[derive(Debug)]
 pub enum ExecutionOutcome {
     /// First time execution of the side effect and its response was cached.
@@ -236,6 +366,7 @@ mod tests {
     use std::time::Duration;
 
     use super::ClaimOutcome;
+    use super::ExecutionError;
     use super::ExecutionOutcome;
     use crate::CachedResponse;
     use crate::ClaimGuard;
@@ -410,5 +541,72 @@ mod tests {
             .await
             .expect("execute");
         assert!(matches!(second, ExecutionOutcome::FingerprintMismatch));
+    }
+
+    #[tokio::test]
+    async fn owned_builder_executes_then_replays() {
+        let store = memory_store();
+        let key = IdempotencyKey::new("owned").expect("valid key");
+
+        let first = store
+            .claim_owned(key.clone(), PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{}")
+            .execute_or_replay(COMPLETED_TTL, |_token| async move { Ok(created(b"first")) })
+            .await
+            .expect("execute");
+        assert!(matches!(first, ExecutionOutcome::Executed(_)));
+
+        let second = store
+            .claim_owned(key, PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{}")
+            .execute_or_replay(COMPLETED_TTL, |_token| async move {
+                Err("the side effect must not re-run on a replay".into())
+            })
+            .await
+            .expect("replay");
+        let ExecutionOutcome::Replayed(cached) = second else {
+            panic!("expected the cached response to replay");
+        };
+        assert_eq!(cached, created(b"first"));
+    }
+
+    #[tokio::test]
+    async fn owned_side_effect_error_leaves_the_claim() {
+        let store = memory_store();
+        let key = IdempotencyKey::new("failed").expect("valid key");
+
+        let failed = store
+            .claim_owned(key.clone(), PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{}")
+            .execute_or_replay(COMPLETED_TTL, |_token| async move { Err("boom".into()) })
+            .await;
+        assert!(matches!(failed, Err(ExecutionError::SideEffect(_))));
+
+        let held = store
+            .claim(&key, PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{}")
+            .try_insert()
+            .await
+            .expect("claim");
+        assert!(matches!(held, ClaimOutcome::Exists { .. }));
+    }
+
+    #[tokio::test]
+    async fn owned_futures_are_send_and_static() {
+        fn assert_send_static<T: Send + 'static>(_: T) {}
+        let store = memory_store();
+        let key = IdempotencyKey::new("moved").expect("valid key");
+        assert_send_static(
+            store
+                .claim_owned(key.clone(), PROCESSING_TTL)
+                .fingerprint(OPERATION, b"{}")
+                .try_insert(),
+        );
+        assert_send_static(
+            store
+                .claim_owned(key, PROCESSING_TTL)
+                .fingerprint(OPERATION, b"{}")
+                .execute_or_replay(COMPLETED_TTL, |_token| async move { Ok(created(b"moved")) }),
+        );
     }
 }

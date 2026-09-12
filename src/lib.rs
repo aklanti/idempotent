@@ -45,6 +45,8 @@ pub use self::store::claim::ExecutionError;
 #[doc(inline)]
 pub use self::store::claim::ExecutionOutcome;
 #[doc(inline)]
+pub use self::store::claim::OwnedClaimBuilder;
+#[doc(inline)]
 pub use self::store::claim::OwnedClaimOutcome;
 #[doc(inline)]
 #[cfg(feature = "memory")]

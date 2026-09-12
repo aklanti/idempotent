@@ -76,8 +76,10 @@ impl<S: IdempotencyStore> ClaimGuard<'_, S> {
 
 /// An owned claim handle that can outlive the current stack frame.
 ///
-/// If it is dropped before [`complete`](Self::complete) runs, a detached task frees the
-/// claim so a retry can rerun the side effect.
+/// If it is dropped before [`complete`](Self::complete) or [`leave`](Self::leave) runs, a
+/// detached task frees the claim so a retry can rerun the side effect. Dropped during
+/// `complete`, it leaves the claim in place, since the store may or may not have applied the
+/// write.
 ///
 /// The TTL expiry is the fallback when that task cannot be spawned.
 pub struct OwnedClaimGuard<S: IdempotencyStore + Clone> {
@@ -86,7 +88,7 @@ pub struct OwnedClaimGuard<S: IdempotencyStore + Clone> {
     fencing_token: FencingToken,
     entry: IdempotencyEntry<Processing>,
     handle: Handle,
-    completed: bool,
+    recover_on_drop: bool,
 }
 
 impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
@@ -107,7 +109,7 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
             fencing_token,
             entry,
             handle: Handle::current(),
-            completed: false,
+            recover_on_drop: true,
         }
     }
 
@@ -139,17 +141,25 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
         response: CachedResponse,
         completed_ttl: Duration,
     ) -> Result<FencedOutcome, S::Error> {
-        self.completed = true;
+        self.recover_on_drop = false;
         let entry = self.entry.clone().complete(response, completed_ttl);
         self.store
             .complete(&self.key, entry, self.fencing_token)
             .await
     }
+
+    /// Consumes the guard and leaves the claim in place until its lease expires.
+    ///
+    /// Use it when the side effect's outcome is unknown, so a retry cannot re-run it before
+    /// the lease ends.
+    pub fn leave(mut self) {
+        self.recover_on_drop = false;
+    }
 }
 
 impl<S: IdempotencyStore + Clone> Drop for OwnedClaimGuard<S> {
     fn drop(&mut self) {
-        if self.completed {
+        if !self.recover_on_drop {
             return;
         }
         let store = self.store.clone();
@@ -206,7 +216,9 @@ mod tests {
         let fingerprint = DefaultFingerprintStrategy.compute("POST /charges", b"{}");
 
         let outcome = store
-            .claim_owned(key.clone(), IdempotencyEntry::new(fingerprint, TTL))
+            .claim_owned(key.clone(), TTL)
+            .fingerprint("POST /charges", b"{}")
+            .try_insert()
             .await
             .expect("claim");
         let OwnedClaimOutcome::Claimed(guard) = outcome else {

@@ -3,7 +3,6 @@
 use std::time::Duration;
 
 use crate::FencedOutcome;
-use crate::OwnedClaimGuard;
 use crate::entry::Completed;
 use crate::entry::ExistingEntry;
 use crate::entry::IdempotencyEntry;
@@ -18,7 +17,7 @@ pub mod valkey;
 
 use self::claim::ClaimBuilder;
 use self::claim::NoFingerprint;
-use self::claim::OwnedClaimOutcome;
+use self::claim::OwnedClaimBuilder;
 
 /// Trait for idempotency entry storage backends.
 pub trait IdempotencyStore: Send + Sync + 'static {
@@ -51,37 +50,21 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         ClaimBuilder::new(self, key, processing_ttl)
     }
 
-    /// Attempts to claim `key`, returning an owned outcome.
+    /// Creates a builder for an owned claim.
     ///
-    /// On success the [`OwnedClaimGuard`] can move across await points and tasks; if it is
-    /// dropped before completion it frees the claim so a retry can re-run.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the store operation fails.
+    /// The builder and the futures it returns own a clone of the store and the key, so they
+    /// can move across tasks and runtimes.
     fn claim_owned(
         &self,
         key: IdempotencyKey,
-        entry: IdempotencyEntry<Processing>,
-    ) -> impl Future<Output = Result<OwnedClaimOutcome<Self>, Self::Error>> + Send
+        processing_ttl: Duration,
+    ) -> OwnedClaimBuilder<Self, NoFingerprint>
     where
-        Self: Clone + Send + Sync + 'static,
+        Self: Sized + Clone,
     {
-        async move {
-            let fingerprint = entry.fingerprint;
-            let value = match self.try_insert(&key, entry.clone()).await? {
-                InsertResult::Claimed { fencing_token } => {
-                    let guard = OwnedClaimGuard::new(self.clone(), key, fencing_token, entry);
-                    OwnedClaimOutcome::Claimed(guard)
-                }
-                InsertResult::Exists(existing) => OwnedClaimOutcome::Exists {
-                    existing,
-                    fingerprint,
-                },
-            };
-            Ok(value)
-        }
+        OwnedClaimBuilder::new(self.clone(), key, processing_ttl)
     }
+
     /// Marks a claimed key as completed and caches its response.
     ///
     /// The entry's `ttl` is the completed lease. The fencing token must match the one returned
