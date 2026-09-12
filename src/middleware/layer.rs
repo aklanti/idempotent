@@ -19,7 +19,10 @@ use http_body::Body;
 use http_body_util::BodyExt;
 use http_body_util::LengthLimitError;
 use http_body_util::Limited;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+use tokio_util::task::TaskTracker;
 use tower::Layer;
 use tower::Service;
 use xxhash_rust::xxh3::xxh3_128;
@@ -70,6 +73,8 @@ struct Settings<S> {
     require_key: bool,
     scope: Option<Arc<ScopeHook>>,
     keep_alive: Duration,
+    tracker: TaskTracker,
+    max_in_flight: Arc<Semaphore>,
 }
 
 impl<S> Settings<S> {
@@ -105,6 +110,13 @@ impl<S> Settings<S> {
         let scope = hook(parts).ok_or(IdempotencyRejection::MissingScope)?;
         stored_key(&scope, &key).map_err(IdempotencyRejection::InvalidKey)
     }
+
+    /// Admits a request under the cap on requests in flight, or rejects it as overloaded.
+    fn admit(&self) -> Result<OwnedSemaphorePermit, IdempotencyRejection> {
+        Arc::clone(&self.max_in_flight)
+            .try_acquire_owned()
+            .map_err(|_| IdempotencyRejection::Overloaded)
+    }
 }
 
 /// Wraps a service so that a request with an idempotency key runs once and replays after.
@@ -130,6 +142,8 @@ impl<S> IdempotencyLayer<S> {
                 require_key: false,
                 scope: None,
                 keep_alive: DEFAULT_KEEP_ALIVE,
+                tracker: TaskTracker::new(),
+                max_in_flight: Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
             },
         }
     }
@@ -217,6 +231,29 @@ impl<S> IdempotencyLayer<S> {
         self.settings.keep_alive = ceiling;
         self
     }
+
+    /// Caps the requests with a key running at once, answering 503 past the cap.
+    ///
+    /// No cap by default. The work for a request with a key outlives the response future, so
+    /// this is the one limit that sees it; a limit outside the layer does not. A request shed
+    /// here has made no store call.
+    pub fn max_in_flight(mut self, limit: usize) -> Self {
+        self.settings.max_in_flight = Arc::new(Semaphore::new(limit));
+        self
+    }
+
+    /// Returns the tracker of the work the layer detached, for the shutdown path.
+    ///
+    /// Close it once connections are no longer accepted, then wait on it. The layer never
+    /// closes it.
+    pub fn tracker(&self) -> TaskTracker {
+        self.settings.tracker.clone()
+    }
+
+    /// Returns the number of requests with a key currently running.
+    pub fn in_flight(&self) -> usize {
+        self.settings.tracker.len()
+    }
 }
 
 impl<S: Clone, Inner> Layer<Inner> for IdempotencyLayer<S> {
@@ -275,18 +312,29 @@ where
             Ok(key) => key,
             Err(rejection) => return ResponseFuture::rejected(rejection),
         };
+        let permit = match self.settings.admit() {
+            Ok(permit) => permit,
+            Err(rejection) => return ResponseFuture::rejected(rejection),
+        };
         let settings = Arc::clone(&self.settings);
-        ResponseFuture::detached(tokio::spawn(run(settings, inner, parts, body, key)))
+        let task = self
+            .settings
+            .tracker
+            .spawn(run(settings, inner, parts, body, key, permit));
+        ResponseFuture::detached(task)
     }
 }
 
 /// Runs a request with a key to completion, detached from the connection.
+///
+/// The permit under the cap on requests in flight is released when the run ends.
 async fn run<S, Inner, ReqBody, ResBody>(
     settings: Arc<Settings<S>>,
     mut inner: Inner,
     parts: Parts,
     body: ReqBody,
     key: IdempotencyKey,
+    _permit: OwnedSemaphorePermit,
 ) -> Result<Response<ResBody>, Inner::Error>
 where
     S: IdempotencyStore,
@@ -1293,5 +1341,57 @@ mod service_tests {
         assert_eq!(&body(first).await[..], b"issued");
         assert_eq!(second.status(), StatusCode::CONFLICT);
         assert_eq!(handler.runs(), 1);
+    }
+
+    #[tokio::test]
+    async fn in_flight_cap_sheds_load() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let handler = Handler::gated(&started, &release);
+        let service = IdempotencyLayer::new(store())
+            .max_in_flight(1)
+            .layer(handler.clone());
+
+        let first = tokio::spawn(service.clone().oneshot(post(Some(KEY), "{}")));
+        started.notified().await;
+        let Ok(shed) = service
+            .clone()
+            .oneshot(post(Some("another-key"), "{}"))
+            .await;
+        release.notify_one();
+        let Ok(first) = first.await.expect("first request");
+        release.notify_one();
+        let Ok(third) = service.oneshot(post(Some("third-key"), "{}")).await;
+
+        assert_eq!(shed.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(rejection(&shed), Some("overloaded"));
+        assert_eq!(retry_after(&shed), Some(&b"1"[..]));
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(third.status(), StatusCode::OK);
+        assert_eq!(handler.runs(), 2);
+    }
+
+    #[tokio::test]
+    async fn tracker_waits_for_detached_work() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let layer = IdempotencyLayer::new(store());
+        let service = layer.layer(Handler::gated(&started, &release));
+
+        let client = tokio::spawn(service.oneshot(post(Some(KEY), "{}")));
+        started.notified().await;
+        client.abort();
+        let tracker = layer.tracker();
+        tracker.close();
+        let drained = tokio::spawn(async move { tracker.wait().await });
+        tokio::task::yield_now().await;
+
+        assert_eq!(layer.in_flight(), 1);
+        assert!(!drained.is_finished());
+
+        release.notify_one();
+        drained.await.expect("drain");
+
+        assert_eq!(layer.in_flight(), 0);
     }
 }

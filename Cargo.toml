@@ -21,6 +21,7 @@ middleware = [
     "dep:http-body",
     "dep:http-body-util",
     "dep:pin-project-lite",
+    "dep:tokio-util",
     "dep:tower",
 ]
 serde = ["dep:serde", "bytes/serde", "uuid?/serde"]
@@ -39,6 +40,7 @@ postcard = { version = "1", optional = true, features = ["alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
+tokio-util = { version = "0.7", features = ["rt"], optional = true }
 tonic = { version = "0.14", default-features = false, optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
 tracing = { version = "0.1", optional = true }
