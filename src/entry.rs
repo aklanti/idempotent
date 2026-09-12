@@ -133,70 +133,23 @@ mod tests {
     use googletest::expect_that;
     use googletest::gtest;
     use googletest::matchers::eq;
-    use googletest::matchers::pat;
 
     use super::*;
 
     #[gtest]
-    fn new_idempotency_entry_always_in_processing_state() {
+    fn complete_carries_fingerprint_and_completed_ttl() {
         let fingerprint = Fingerprint(0x1ab950a);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
-        expect_that!(entry.fingerprint, eq(fingerprint));
-        expect_that!(entry.state, pat!(Processing { .. }));
-    }
-
-    #[gtest]
-    fn new_idempotency_preserve_ttl() {
-        let fingerprint = Fingerprint(0x1ab950a);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
-        expect_that!(entry.ttl, eq(Duration::from_nanos(1)));
-    }
-
-    #[gtest]
-    fn can_complete_processing_idempotency_entry() {
-        let fingerprint = Fingerprint(0x1ab950a);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
-        expect_that!(entry.fingerprint, eq(fingerprint));
-        expect_that!(entry.state, pat!(Processing));
+        let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
         let response = CachedResponse {
             status_code: 200,
             metadata: Metadata::default(),
             body: vec![].into(),
         };
-        let completed_entry = entry.complete(response.clone(), Duration::from_secs(60));
 
-        let state = Completed { response };
-        expect_that!(completed_entry.state, eq(&state));
-    }
+        let completed = entry.complete(response.clone(), Duration::from_secs(60));
 
-    #[gtest]
-    fn complete_idempotency_entry_preserve_fingerprint() {
-        let fingerprint = Fingerprint(0x1ab950a);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
-        expect_that!(entry.fingerprint, eq(fingerprint));
-        expect_that!(entry.state, pat!(Processing { .. }));
-        let response = CachedResponse {
-            status_code: 200,
-            metadata: Metadata::default(),
-            body: vec![].into(),
-        };
-        let completed_entry = entry.complete(response.clone(), Duration::from_secs(60));
-        expect_that!(completed_entry.fingerprint, eq(fingerprint));
-    }
-
-    #[gtest]
-    fn complete_idempotency_entry_sets_completed_ttl() {
-        let fingerprint = Fingerprint(0x1ab950a);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::from_nanos(1));
-        expect_that!(entry.fingerprint, eq(fingerprint));
-        expect_that!(entry.state, pat!(Processing));
-        let response = CachedResponse {
-            status_code: 200,
-            metadata: Metadata::default(),
-            body: vec![].into(),
-        };
-        let completed_ttl = Duration::from_secs(60);
-        let completed_entry = entry.complete(response.clone(), completed_ttl);
-        expect_that!(completed_entry.ttl, eq(completed_ttl));
+        expect_that!(completed.fingerprint, eq(fingerprint));
+        expect_that!(completed.ttl, eq(Duration::from_secs(60)));
+        expect_that!(completed.state, eq(&Completed { response }));
     }
 }

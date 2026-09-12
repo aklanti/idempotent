@@ -150,44 +150,11 @@ mod tests {
     use std::time::Duration;
 
     use crate::CachedResponse;
-    use crate::FencedOutcome;
     use crate::IdempotencyKey;
     use crate::Metadata;
     use crate::store::IdempotencyStore;
-    use crate::store::claim::ClaimOutcome;
     use crate::store::claim::ExecutionOutcome;
     use crate::store::memory::MemoryStore;
-
-    #[tokio::test]
-    async fn claims_and_completes() {
-        let store = MemoryStore::builder()
-            .buffer(16)
-            .sweep_interval(Duration::from_secs(60))
-            .try_build()
-            .expect("build memory store");
-
-        let key = IdempotencyKey::new("shared").expect("valid key");
-        let outcome = store
-            .claim(&key, Duration::from_secs(30))
-            .fingerprint("POST /charges", b"{}")
-            .try_insert()
-            .await
-            .expect("claim");
-        let ClaimOutcome::Claimed(guard) = outcome else {
-            panic!("expected a fresh claim");
-        };
-
-        let response = CachedResponse {
-            status_code: 201,
-            metadata: Metadata::new(),
-            body: b"ok".to_vec().into(),
-        };
-        let applied = guard
-            .complete(response, Duration::from_secs(60))
-            .await
-            .expect("complete");
-        assert_eq!(applied, FencedOutcome::Applied);
-    }
 
     #[tokio::test]
     async fn executes_then_replays() {

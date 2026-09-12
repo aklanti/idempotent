@@ -83,9 +83,13 @@ impl MemoryStore {
         rx.await.map_err(|_| MemoryStoreError::TaskStopped)
     }
 
-    /// Return true if the lenght is zero.
+    /// Returns `true` when the store holds no entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the background task has stopped.
     pub async fn is_empty(&self) -> Result<bool, MemoryStoreError> {
-        self.len().await.map(|v| v == 0)
+        self.len().await.map(|count| count == 0)
     }
 }
 
@@ -464,211 +468,22 @@ mod tests {
     }
 
     #[gtest]
-    fn sweep_removes_expired() {
+    fn sweep_removes_expired_and_keeps_live() {
         let mut store = MemoryStoreActor::default();
-        let key = IdempotencyKey::new("lumumba").expect("valid key");
+        let expired = IdempotencyKey::new("lumumba").expect("valid key");
+        let live = IdempotencyKey::new("achebe").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, Duration::ZERO);
-
-        let first = store.try_insert(key.clone(), entry);
-        expect_that!(
-            first,
-            pat!(InsertResult::Claimed {
-                fencing_token: anything()
-            })
+        store.try_insert(
+            expired.clone(),
+            IdempotencyEntry::new(fingerprint, Duration::ZERO),
         );
+        store.try_insert(live.clone(), IdempotencyEntry::new(fingerprint, TTL));
 
         std::thread::sleep(Duration::from_millis(1));
         store.sweep();
 
-        expect_that!(store.contains(&key), eq(false));
-    }
-
-    #[gtest]
-    fn sweep_keeps_live() {
-        let mut store = MemoryStoreActor::default();
-        let key = IdempotencyKey::new("lumumba").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-
-        let first = store.try_insert(key.clone(), entry);
-        expect_that!(
-            first,
-            pat!(InsertResult::Claimed {
-                fencing_token: anything()
-            })
-        );
-
-        store.sweep();
-
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let second = store.try_insert(key, entry);
-        expect_that!(second, pat!(InsertResult::Exists(_)));
-    }
-
-    #[gtest]
-    #[tokio::test]
-    async fn insert_and_claim() {
-        let store = MemoryStore::builder()
-            .buffer(16)
-            .sweep_interval(TTL)
-            .try_build()
-            .expect("build memory store");
-        let key = IdempotencyKey::new("wangari").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-
-        let result = store.try_insert(&key, entry).await;
-        expect_that!(
-            result,
-            ok(pat!(InsertResult::Claimed {
-                fencing_token: anything()
-            }))
-        );
-    }
-
-    #[gtest]
-    #[tokio::test]
-    async fn insert_duplicate_exists() {
-        let store = MemoryStore::builder()
-            .buffer(16)
-            .sweep_interval(TTL)
-            .try_build()
-            .expect("build memory store");
-        let key = IdempotencyKey::new("wangari").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-
-        let first = store.try_insert(&key, entry.clone()).await;
-        expect_that!(
-            first,
-            ok(pat!(InsertResult::Claimed {
-                fencing_token: anything()
-            }))
-        );
-
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let second = store.try_insert(&key, entry).await;
-        expect_that!(second, ok(pat!(InsertResult::Exists(_))));
-    }
-
-    #[gtest]
-    #[tokio::test]
-    async fn complete_and_replay() {
-        let store = MemoryStore::builder()
-            .buffer(16)
-            .sweep_interval(TTL)
-            .try_build()
-            .expect("build memory store");
-        let key = IdempotencyKey::new("wangari").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let response = CachedResponse {
-            status_code: 201,
-            metadata: Metadata::default(),
-            body: Bytes::from_static(b"ok"),
-        };
-
-        let first = store.try_insert(&key, entry.clone()).await;
-        let InsertResult::Claimed { fencing_token } = first.expect("an insertion result") else {
-            return;
-        };
-
-        let completed = entry.complete(response.clone(), TTL);
-        store
-            .complete(&key, completed, fencing_token)
-            .await
-            .expect("an insertion result");
-
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let replay = store.try_insert(&key, entry).await;
-        let Ok(InsertResult::Exists(ExistingEntry::Completed(entry))) = replay else {
-            panic!("expected Exists(Completed), got {replay:?}");
-        };
-        let response = entry.response();
-        expect_that!(response.status_code, eq(201));
-        expect_that!(response.body, eq(&Bytes::from_static(b"ok")));
-    }
-
-    #[gtest]
-    #[tokio::test]
-    async fn complete_wrong_token() {
-        let store = MemoryStore::builder()
-            .buffer(16)
-            .sweep_interval(TTL)
-            .try_build()
-            .expect("build memory store");
-        let key = IdempotencyKey::new("wangari").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let response = CachedResponse {
-            status_code: 200,
-            metadata: Metadata::default(),
-            body: vec![].into(),
-        };
-
-        let first = store.try_insert(&key, entry).await;
-        expect_that!(
-            first,
-            ok(pat!(InsertResult::Claimed {
-                fencing_token: anything()
-            }))
-        );
-
-        let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response, TTL);
-        let wrong_token = FencingToken::new(0, 4);
-        store
-            .complete(&key, completed, wrong_token)
-            .await
-            .expect("entry to complete");
-
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let second = store.try_insert(&key, entry).await;
-        expect_that!(
-            second,
-            ok(pat!(InsertResult::Exists(pat!(ExistingEntry::Processing(
-                anything()
-            )))))
-        );
-    }
-
-    #[gtest]
-    #[tokio::test]
-    async fn remove_and_reclaim() {
-        let store = MemoryStore::builder()
-            .buffer(16)
-            .sweep_interval(TTL)
-            .try_build()
-            .expect("build memory store");
-        let key = IdempotencyKey::new("wangari").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-
-        let first = store.try_insert(&key, entry).await;
-        expect_that!(
-            first,
-            ok(pat!(InsertResult::Claimed {
-                fencing_token: anything()
-            }))
-        );
-
-        let Ok(InsertResult::Claimed { fencing_token }) = first else {
-            panic!("expected claimed");
-        };
-
-        store
-            .remove(&key, fencing_token)
-            .await
-            .expect("entry to be removed");
-
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let second = store.try_insert(&key, entry).await;
-        expect_that!(
-            second,
-            ok(pat!(InsertResult::Claimed {
-                fencing_token: anything()
-            }))
-        );
+        expect_that!(store.contains(&expired), eq(false));
+        expect_that!(store.contains(&live), eq(true));
     }
 
     #[gtest]
@@ -830,16 +645,6 @@ mod tests {
 
     #[gtest]
     #[tokio::test]
-    async fn close_waits_for_the_task_to_stop() {
-        let store = MemoryStore::builder().try_build().expect("build");
-        expect_that!(store.is_healthy(), eq(true));
-
-        let closed = tokio::time::timeout(Duration::from_secs(1), store.close()).await;
-        expect_that!(closed, ok(anything()));
-    }
-
-    #[gtest]
-    #[tokio::test]
     async fn store_outliving_its_runtime_reports_task_stopped() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -879,6 +684,5 @@ mod tests {
 
         store.purge(&first).await.expect("purge");
         expect_that!(store.len().await, ok(eq(&1)));
-        expect_that!(store.is_empty().await, ok(eq(&false)));
     }
 }

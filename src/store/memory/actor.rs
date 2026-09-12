@@ -25,10 +25,6 @@ impl MemoryStoreActor {
         Self::default()
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::run", skip_all)
-    )]
     pub async fn run(mut self, mut rx: mpsc::Receiver<Command>, sweep_interval: Duration) {
         let mut interval = tokio::time::interval(sweep_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -75,14 +71,6 @@ impl MemoryStoreActor {
         tracing::debug!("idempotency store background task stopped");
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(
-            name = "MemoryStoreActor::try_insert",
-            skip_all,
-            fields(key = %key),
-        ),
-    )]
     pub fn try_insert(
         &mut self,
         key: IdempotencyKey,
@@ -110,14 +98,6 @@ impl MemoryStoreActor {
         InsertResult::Claimed { fencing_token }
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(
-            name = "MemoryStoreActor::complete",
-            skip_all,
-            fields(key = %key),
-        )
-    )]
     pub fn complete(
         &mut self,
         key: IdempotencyKey,
@@ -146,14 +126,6 @@ impl MemoryStoreActor {
         FencedOutcome::KeyExpired
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(
-            name = "MemoryStoreActor::remove",
-            skip_all,
-            fields(key = %key),
-        ),
-    )]
     pub fn remove(&mut self, key: &IdempotencyKey, fencing_token: FencingToken) -> FencedOutcome {
         match self.entries.get(key).filter(|record| !record.is_expired()) {
             Some(record) if record.fencing_token == fencing_token => {
@@ -169,14 +141,6 @@ impl MemoryStoreActor {
         }
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(
-            name = "MemoryStoreActor::touch",
-            skip_all,
-            fields(key = %key),
-        ),
-    )]
     fn touch(
         &mut self,
         key: &IdempotencyKey,
@@ -199,10 +163,6 @@ impl MemoryStoreActor {
         FencedOutcome::KeyExpired
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::sweep", skip_all)
-    )]
     pub fn sweep(&mut self) {
         #[cfg(feature = "tracing")]
         let before = self.entries.len();
@@ -215,10 +175,6 @@ impl MemoryStoreActor {
         );
     }
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "MemoryStoreActor::purge", skip_all, fields(key = %key)),
-    )]
     pub fn purge(&mut self, key: &IdempotencyKey) {
         #[cfg(feature = "tracing")]
         tracing::warn!(key = %key, "purge: unfenced delete");

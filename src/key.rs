@@ -14,7 +14,7 @@ impl IdempotencyKey {
     /// Prefix / tenancy boundary. Reserved: forbidden in keys and prefixes.
     const PREFIX_SEPARATOR: char = ':';
     /// Scope boundary. Reserved likewise.
-    pub const SCOPE_SEPARATOR: char = '/';
+    pub(crate) const SCOPE_SEPARATOR: char = '/';
 
     /// Creates an idempotency key, validating its length and character set.
     ///
@@ -76,12 +76,11 @@ impl IdempotencyKey {
         Ok(Self(derived))
     }
 
-    /// Like [`scoped`](Self::scoped) but **consumes** the key for a linear
-    /// cursor advancing through states, where the previous key should become
-    /// inaccessible.
+    /// Like [`scoped`](Self::scoped) but **consumes** the key for a linear cursor advancing through
+    /// states, where the previous key should become inaccessible.
     ///
-    /// On error the key is consumed. Use [`scoped`](Self::scoped)
-    /// if you need to keep the original when validation fails.
+    /// On error the key is consumed. Use [`scoped`](Self::scoped) if you need to keep the original
+    /// when validation fails.
     ///
     /// # Errors
     /// Same as [`scoped`](Self::scoped).

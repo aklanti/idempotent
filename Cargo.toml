@@ -45,8 +45,7 @@ features = ["aio", "connection-manager", "tokio-rustls-comp", "script"]
 optional = true
 
 [dev-dependencies]
-googletest = { version = "0.14", features = ["proptest"] }
-proptest = "1.11"
+googletest = "0.14"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["valkey"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

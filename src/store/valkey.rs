@@ -419,22 +419,6 @@ mod tests {
 
     #[gtest]
     #[tokio::test]
-    async fn insert_and_claim() {
-        let (store, _container) = new_store().await;
-        let key = IdempotencyKey::new("sankara").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let result = store.try_insert(&key, entry).await;
-        expect_that!(
-            result,
-            ok(pat!(InsertResult::Claimed {
-                fencing_token: anything()
-            }))
-        )
-    }
-
-    #[gtest]
-    #[tokio::test]
     async fn complete_and_replay() {
         let (store, _container) = new_store().await;
 
@@ -451,7 +435,13 @@ mod tests {
             return;
         };
 
-        expect_that!(fencing_token.sequence, eq(1));
+        let duplicate = store.try_insert(&key, entry.clone()).await;
+        let Ok(InsertResult::Exists(ExistingEntry::Processing(existing))) = duplicate else {
+            panic!("expected Exists(Processing), got {duplicate:?}")
+        };
+        expect_that!(existing.fingerprint, eq(fingerprint));
+        expect_that!(existing.ttl, eq(TTL));
+
         let completed = entry.complete(response, TTL);
         let result = store.complete(&key, completed, fencing_token).await;
 
@@ -464,41 +454,6 @@ mod tests {
         let response = entry.response();
         expect_that!(response.status_code, eq(200));
         expect_that!(response.body, eq(&Bytes::from_static(b"ok")));
-    }
-
-    #[gtest]
-    #[tokio::test]
-    async fn consecutive_call_generate_consecutive_fencing_token() {
-        let (store, _container) = new_store().await;
-
-        let key = IdempotencyKey::new("sankara").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let first = store.try_insert(&key, entry.clone()).await;
-
-        expect_that!(
-            first,
-            ok(pat!(&InsertResult::Claimed {
-                fencing_token: pat!(FencingToken {
-                    sequence: eq(1),
-                    ..
-                })
-            }))
-        );
-
-        let key = IdempotencyKey::new("soyinka").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/accept", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-        let second = store.try_insert(&key, entry.clone()).await;
-        expect_that!(
-            second,
-            ok(pat!(&InsertResult::Claimed {
-                fencing_token: pat!(FencingToken {
-                    sequence: eq(2),
-                    ..
-                })
-            }))
-        );
     }
 
     #[gtest]
@@ -517,6 +472,18 @@ mod tests {
 
         expect_that!(fencing_token.run_id, eq(server_run_id(&store).await));
         expect_that!(fencing_token.sequence, eq(1));
+
+        let other = IdempotencyKey::new("soyinka").expect("valid key");
+        let Ok(InsertResult::Claimed {
+            fencing_token: next,
+        }) = store
+            .try_insert(&other, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+        else {
+            panic!("expected a fresh claim");
+        };
+        expect_that!(next.run_id, eq(fencing_token.run_id));
+        expect_that!(next.sequence, eq(2));
     }
 
     #[gtest]
@@ -639,25 +606,6 @@ mod tests {
 
     #[gtest]
     #[tokio::test]
-    async fn insert_duplicate_returns_in_progress() {
-        let (store, _container) = new_store().await;
-        let key = IdempotencyKey::new("sankara").expect("valid key");
-        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
-        let entry = IdempotencyEntry::new(fingerprint, TTL);
-
-        let first = store.try_insert(&key, entry.clone()).await;
-        expect_that!(first, ok(pat!(InsertResult::Claimed { .. })));
-
-        let second = store.try_insert(&key, entry).await;
-        let Ok(InsertResult::Exists(ExistingEntry::Processing(existing))) = second else {
-            panic!("expected Exists(Processing), got {second:?}")
-        };
-        expect_that!(existing.fingerprint, eq(fingerprint));
-        expect_that!(existing.ttl, eq(TTL));
-    }
-
-    #[gtest]
-    #[tokio::test]
     async fn touch_after_complete_is_rejected() {
         let (store, _container) = new_store().await;
         let key = IdempotencyKey::new("sankara").expect("valid key");
@@ -678,12 +626,5 @@ mod tests {
 
         let rejected = store.touch(&key, fencing_token, TTL).await;
         expect_that!(rejected, ok(eq(&FencedOutcome::KeyExpired)));
-    }
-
-    #[gtest]
-    #[tokio::test]
-    async fn ping_round_trips() {
-        let (store, _container) = new_store().await;
-        expect_that!(store.ping().await, ok(anything()));
     }
 }

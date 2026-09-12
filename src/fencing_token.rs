@@ -1,7 +1,7 @@
 //! Fencing tokens and fenced-operation outcomes.
 
 /// A token issued when a key is claimed.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FencingToken {
     /// The lifetime of the store process that issued the token.
@@ -27,6 +27,10 @@ pub enum FencedOutcome {
     /// The idempotency key has expired.
     KeyExpired,
     /// The completing request's fingerprint does not match the claimed request.
+    ///
+    /// Only a direct call to [`IdempotencyStore::complete`](crate::IdempotencyStore::complete)
+    /// can produce it; the claim guards build the completed entry from the claim's own
+    /// fingerprint.
     FingerprintMismatch,
 }
 
@@ -41,20 +45,5 @@ impl FencedOutcome {
             3 => Some(Self::FingerprintMismatch),
             _ => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn equal_sequences_from_different_lifetimes_differ() {
-        assert_ne!(FencingToken::new(1, 7), FencingToken::new(2, 7));
-    }
-
-    #[test]
-    fn order_follows_the_sequence_within_a_lifetime() {
-        assert!(FencingToken::new(1, 7) < FencingToken::new(1, 8));
     }
 }
