@@ -11,9 +11,10 @@ keywords = ["idempotency", "idempotent", "api", "retry", "deduplication"]
 categories = ["web-programming", "data-structures"]
 
 [package.metadata.docs.rs]
-features = ["memory", "middleware", "serde", "tonic", "tracing", "uuid", "valkey"]
+features = ["axum", "memory", "middleware", "serde", "tonic", "tracing", "uuid", "valkey"]
 
 [features]
+axum = ["dep:axum", "middleware"]
 default = ["uuid"]
 memory = ["tokio/time", "tokio/macros"]
 middleware = [
@@ -31,6 +32,7 @@ uuid = ["dep:uuid"]
 valkey = ["dep:redis", "dep:postcard", "serde"]
 
 [dependencies]
+axum = { version = "0.8", default-features = false, optional = true }
 bytes = { version = "1" }
 http = { version = "1", optional = true }
 http-body = { version = "1", optional = true }

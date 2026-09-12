@@ -114,6 +114,20 @@ impl IdempotencyKey {
     }
 }
 
+/// Reads the key from a header.
+///
+/// A value that is not visible ASCII is an invalid key, as is one that fails
+/// [`IdempotencyKey::new`].
+#[cfg(feature = "middleware")]
+impl TryFrom<&http::HeaderValue> for IdempotencyKey {
+    type Error = Error;
+
+    fn try_from(value: &http::HeaderValue) -> Result<Self, Error> {
+        let value = value.to_str().map_err(|_| Error::InvalidKey)?;
+        Self::new(value)
+    }
+}
+
 impl fmt::Display for IdempotencyKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)

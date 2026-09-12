@@ -49,7 +49,7 @@ use crate::fingerprint::Operation;
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// The header the key is read from by default.
-const DEFAULT_HEADER: HeaderName = HeaderName::from_static("idempotency-key");
+pub(super) const DEFAULT_HEADER: HeaderName = HeaderName::from_static("idempotency-key");
 /// Marks a response served from the cache.
 const REPLAYED: HeaderName = HeaderName::from_static("idempotent-replayed");
 const DEFAULT_PROCESSING_TTL: Duration = Duration::from_secs(60);
@@ -90,10 +90,7 @@ impl<S> Settings<S> {
                 Ok(None)
             };
         };
-        let value = value
-            .to_str()
-            .map_err(|_| IdempotencyRejection::InvalidKey(Error::InvalidKey))?;
-        IdempotencyKey::new(value)
+        IdempotencyKey::try_from(value)
             .map(Some)
             .map_err(IdempotencyRejection::InvalidKey)
     }
@@ -344,20 +341,20 @@ where
             }
         };
         let settings = Arc::clone(&self.settings);
-        let future = run(settings, inner, parts, body, key, permit);
+        let future = handle(settings, inner, parts, body, key, permit);
         #[cfg(feature = "tracing")]
         let future = tracing::Instrument::instrument(future, span);
         ResponseFuture::detached(self.settings.tracker.spawn(future))
     }
 }
 
-/// Runs a request with a key to completion, detached from the connection.
+/// Handles a request with a key to completion, detached from the connection.
 ///
-/// The permit under the cap on requests in flight is released when the run ends.
-async fn run<S, Inner, ReqBody, ResBody>(
+/// The permit under the cap on requests in flight is released when the handling ends.
+async fn handle<S, Inner, ReqBody, ResBody>(
     settings: Arc<Settings<S>>,
     mut inner: Inner,
-    parts: Parts,
+    mut parts: Parts,
     body: ReqBody,
     key: IdempotencyKey,
     _permit: OwnedSemaphorePermit,
@@ -423,6 +420,7 @@ where
         }
     };
 
+    parts.extensions.insert(key.clone());
     let request = Request::from_parts(parts, ReqBody::from(bytes));
     let response = tokio::select! {
         result = inner.call(request) => match result {

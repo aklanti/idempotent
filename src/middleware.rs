@@ -1,5 +1,7 @@
 //! Tower middleware for HTTP services.
 
+#[cfg(feature = "axum")]
+mod axum;
 mod layer;
 pub mod rejection;
 
