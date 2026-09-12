@@ -5,8 +5,12 @@
 -- ARGV[4] = ttl_ms on completion
 -- ARGV[5] = fingerprint of the completing request
 
-local stored = redis.call('HMGET', KEYS[1], 'run_id', 'ft', 'fp')
+local stored = redis.call('HMGET', KEYS[1], 'run_id', 'ft', 'fp', 'status')
 if not stored[2] then
+    return 2
+end
+-- Only a live claim can be completed; a completed entry keeps its cached response.
+if stored[4] ~= 'in_progress' then
     return 2
 end
 if stored[1] ~= ARGV[2] or stored[2] ~= ARGV[3] then

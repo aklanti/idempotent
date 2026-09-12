@@ -1,3 +1,5 @@
+//! Building blocks for HTTP middleware.
+
 pub mod extract;
 pub mod rejection;
 

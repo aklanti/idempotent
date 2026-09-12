@@ -1,3 +1,5 @@
+//! The claim builder and the outcomes of claiming a key.
+
 use std::time::Duration;
 
 use super::InsertResult;
@@ -151,7 +153,9 @@ pub enum ClaimOutcome<'store, S: IdempotencyStore> {
     Claimed(ClaimGuard<'store, S>),
     /// The key is already taken.
     Exists {
+        /// The entry that holds the key.
         existing: ExistingEntry,
+        /// This request's fingerprint, to compare with the entry's.
         fingerprint: Fingerprint,
     },
 }
@@ -161,7 +165,9 @@ pub enum OwnedClaimOutcome<S: IdempotencyStore + Clone> {
     Claimed(OwnedClaimGuard<S>),
     /// The key is already taken.
     Exists {
+        /// The entry that holds the key.
         existing: ExistingEntry,
+        /// This request's fingerprint, to compare with the entry's.
         fingerprint: Fingerprint,
     },
 }
@@ -355,5 +361,54 @@ mod tests {
         };
         assert_eq!(cached, created(b"second"));
         assert_ne!(cached, created(b"first"));
+    }
+
+    #[tokio::test]
+    async fn execute_or_replay_reports_in_flight() {
+        let store = memory_store();
+        let key = IdempotencyKey::new("in-flight").expect("valid key");
+        let held = store
+            .claim(&key, PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{}")
+            .try_insert()
+            .await
+            .expect("claim");
+        let ClaimOutcome::Claimed(_guard) = held else {
+            panic!("expected a fresh claim");
+        };
+
+        let outcome = store
+            .claim(&key, PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{}")
+            .execute_or_replay(COMPLETED_TTL, |_token| async move {
+                Err("the side effect must not run while the key is held".into())
+            })
+            .await
+            .expect("execute");
+        assert!(matches!(outcome, ExecutionOutcome::InFlight));
+    }
+
+    #[tokio::test]
+    async fn execute_or_replay_rejects_foreign_body() {
+        let store = memory_store();
+        let key = IdempotencyKey::new("reused").expect("valid key");
+
+        let first = store
+            .claim(&key, PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{\"amount\": 1}")
+            .execute_or_replay(COMPLETED_TTL, |_token| async move { Ok(created(b"first")) })
+            .await
+            .expect("execute");
+        assert!(matches!(first, ExecutionOutcome::Executed(_)));
+
+        let second = store
+            .claim(&key, PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{\"amount\": 2}")
+            .execute_or_replay(COMPLETED_TTL, |_token| async move {
+                Err("the side effect must not run for a different request".into())
+            })
+            .await
+            .expect("execute");
+        assert!(matches!(second, ExecutionOutcome::FingerprintMismatch));
     }
 }

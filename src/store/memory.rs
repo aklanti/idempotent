@@ -277,6 +277,7 @@ mod tests {
     use googletest::gtest;
     use googletest::matchers::anything;
     use googletest::matchers::eq;
+    use googletest::matchers::err;
     use googletest::matchers::ok;
     use googletest::matchers::pat;
 
@@ -291,6 +292,14 @@ mod tests {
     const _: () = assert_usable_with_middleware::<MemoryStore>();
 
     const TTL: Duration = Duration::from_secs(60);
+
+    fn response(body: &'static [u8]) -> CachedResponse {
+        CachedResponse {
+            status_code: 200,
+            metadata: Metadata::default(),
+            body: Bytes::from_static(body),
+        }
+    }
 
     #[gtest]
     fn insert_vacant_return_a_claim_with_fencing_token() {
@@ -753,5 +762,123 @@ mod tests {
 
             expect_that!(entry.response().status_code, eq(200));
         }
+    }
+
+    #[gtest]
+    fn complete_after_complete_is_rejected() {
+        let mut store = MemoryStoreActor::new();
+        let key = IdempotencyKey::new("chimamanda").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let InsertResult::Claimed { fencing_token } =
+            store.try_insert(key.clone(), IdempotencyEntry::new(fingerprint, TTL))
+        else {
+            panic!("expected a fresh claim");
+        };
+
+        let first = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"first"), TTL);
+        let applied = store.complete(key.clone(), first, fencing_token);
+        expect_that!(applied, eq(FencedOutcome::Applied));
+
+        let second = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"second"), TTL);
+        let rejected = store.complete(key.clone(), second, fencing_token);
+        expect_that!(rejected, eq(FencedOutcome::KeyExpired));
+
+        let replay = store.try_insert(key, IdempotencyEntry::new(fingerprint, TTL));
+        let InsertResult::Exists(ExistingEntry::Completed(entry)) = replay else {
+            panic!("expected Exists(Completed), got {replay:?}")
+        };
+        expect_that!(entry.response().body, eq(&Bytes::from_static(b"first")));
+    }
+
+    #[gtest]
+    fn complete_with_foreign_fingerprint_is_rejected() {
+        let mut store = MemoryStoreActor::new();
+        let key = IdempotencyKey::new("chimamanda").expect("valid key");
+        let claimed = DefaultFingerprintStrategy.compute("/submit", b"original");
+        let InsertResult::Claimed { fencing_token } =
+            store.try_insert(key.clone(), IdempotencyEntry::new(claimed, TTL))
+        else {
+            panic!("expected a fresh claim");
+        };
+
+        let foreign = DefaultFingerprintStrategy.compute("/submit", b"different");
+        let completed = IdempotencyEntry::new(foreign, TTL).complete(response(b"ok"), TTL);
+        let rejected = store.complete(key.clone(), completed, fencing_token);
+        expect_that!(rejected, eq(FencedOutcome::FingerprintMismatch));
+
+        let replay = store.try_insert(key, IdempotencyEntry::new(claimed, TTL));
+        expect_that!(
+            replay,
+            pat!(InsertResult::Exists(pat!(ExistingEntry::Processing(_))))
+        );
+    }
+
+    #[gtest]
+    fn try_build_rejects_invalid_config() {
+        let zero_buffer = MemoryStore::builder().buffer(0).try_build();
+        expect_that!(zero_buffer, err(pat!(MemoryStoreError::ZeroBuffer)));
+
+        let zero_sweep = MemoryStore::builder()
+            .sweep_interval(Duration::ZERO)
+            .try_build();
+        expect_that!(zero_sweep, err(pat!(MemoryStoreError::ZeroSweepInterval)));
+
+        // A plain test has no Tokio runtime to spawn the task on.
+        let no_runtime = MemoryStore::builder().try_build();
+        expect_that!(no_runtime, err(pat!(MemoryStoreError::NoRuntime)));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn close_waits_for_the_task_to_stop() {
+        let store = MemoryStore::builder().try_build().expect("build");
+        expect_that!(store.is_healthy(), eq(true));
+
+        let closed = tokio::time::timeout(Duration::from_secs(1), store.close()).await;
+        expect_that!(closed, ok(anything()));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn store_outliving_its_runtime_reports_task_stopped() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let store = MemoryStore::builder()
+            .runtime(runtime.handle().clone())
+            .try_build()
+            .expect("build");
+        expect_that!(store.is_healthy(), eq(true));
+
+        // The task goes down with its runtime, so the command channel closes.
+        runtime.shutdown_background();
+        expect_that!(store.is_healthy(), eq(false));
+        expect_that!(store.len().await, err(pat!(MemoryStoreError::TaskStopped)));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn len_counts_live_entries() {
+        let store = MemoryStore::builder().try_build().expect("build");
+        expect_that!(store.len().await, ok(eq(&0)));
+        expect_that!(store.is_empty().await, ok(eq(&true)));
+
+        let fingerprint = DefaultFingerprintStrategy.compute("/submit", &[]);
+        let first = IdempotencyKey::new("achebe").expect("valid key");
+        let second = IdempotencyKey::new("soyinka").expect("valid key");
+        store
+            .try_insert(&first, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+            .expect("claim");
+        store
+            .try_insert(&second, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+            .expect("claim");
+        expect_that!(store.len().await, ok(eq(&2)));
+
+        store.purge(&first).await.expect("purge");
+        expect_that!(store.len().await, ok(eq(&1)));
+        expect_that!(store.is_empty().await, ok(eq(&false)));
     }
 }

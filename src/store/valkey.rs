@@ -325,6 +325,7 @@ impl ValkeyStoreBuilder {
 
 #[cfg(test)]
 mod tests {
+
     use bytes::Bytes;
     use googletest::expect_that;
     use googletest::gtest;
@@ -355,27 +356,31 @@ mod tests {
         (store, container)
     }
 
-    /// Connects to the container, retrying while it comes up after a start or a restart.
     async fn connect(container: &ContainerAsync<Valkey>) -> ValkeyStore {
+        let host = container.get_host().await.expect("to get container host");
         let port = container
             .get_host_port_ipv4(6379)
             .await
             .expect("to get container port");
         let client =
-            redis::Client::open(format!("redis://127.0.0.1:{port}")).expect("to parse the URL");
-        for _ in 0..50 {
-            let built = ValkeyStore::with_client(client.clone())
-                .prefix("test")
-                .try_build()
-                .await;
-            if let Ok(store) = built
-                && store.ping().await.is_ok()
-            {
-                return store;
+            redis::Client::open(format!("redis://{host}:{port}")).expect("to parse the URL");
+        let attempts = async {
+            loop {
+                let built = ValkeyStore::with_client(client.clone())
+                    .prefix("test")
+                    .try_build()
+                    .await;
+                if let Ok(store) = built
+                    && store.ping().await.is_ok()
+                {
+                    return store;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        panic!("Valkey did not become reachable");
+        };
+        tokio::time::timeout(Duration::from_secs(30), attempts)
+            .await
+            .expect("Valkey did not become reachable within thirty seconds")
     }
 
     /// The stored server run id.
@@ -391,6 +396,14 @@ mod tests {
             .expect("a run_id line")
             .trim();
         u64::from_str_radix(&run_id[..16], 16).expect("hex run id")
+    }
+
+    fn response(body: &'static [u8]) -> CachedResponse {
+        CachedResponse {
+            status_code: 200,
+            metadata: Metadata::default(),
+            body: Bytes::from_static(body),
+        }
     }
 
     #[gtest]
@@ -563,5 +576,114 @@ mod tests {
         expect_that!(stale, ok(eq(&FencedOutcome::FencingMismatch)));
         let live = store.complete(&key, completed, after).await;
         expect_that!(live, ok(eq(&FencedOutcome::Applied)));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn complete_after_complete_is_rejected() {
+        let (store, _container) = new_store().await;
+        let key = IdempotencyKey::new("sankara").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
+        let Ok(InsertResult::Claimed { fencing_token }) = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+        else {
+            panic!("expected a fresh claim");
+        };
+
+        let first = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"first"), TTL);
+        let applied = store.complete(&key, first, fencing_token).await;
+        expect_that!(applied, ok(eq(&FencedOutcome::Applied)));
+
+        let second = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"second"), TTL);
+        let rejected = store.complete(&key, second, fencing_token).await;
+        expect_that!(rejected, ok(eq(&FencedOutcome::KeyExpired)));
+
+        let replay = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await;
+        let Ok(InsertResult::Exists(ExistingEntry::Completed(entry))) = replay else {
+            panic!("expected Exists(Completed), got {replay:?}")
+        };
+        expect_that!(entry.response().body, eq(&Bytes::from_static(b"first")));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn complete_with_foreign_fingerprint_is_rejected() {
+        let (store, _container) = new_store().await;
+        let key = IdempotencyKey::new("sankara").expect("valid key");
+        let claimed = DefaultFingerprintStrategy.compute("/list", b"original");
+        let Ok(InsertResult::Claimed { fencing_token }) = store
+            .try_insert(&key, IdempotencyEntry::new(claimed, TTL))
+            .await
+        else {
+            panic!("expected a fresh claim");
+        };
+
+        let foreign = DefaultFingerprintStrategy.compute("/list", b"different");
+        let completed = IdempotencyEntry::new(foreign, TTL).complete(response(b"ok"), TTL);
+        let rejected = store.complete(&key, completed, fencing_token).await;
+        expect_that!(rejected, ok(eq(&FencedOutcome::FingerprintMismatch)));
+
+        let replay = store
+            .try_insert(&key, IdempotencyEntry::new(claimed, TTL))
+            .await;
+        expect_that!(
+            replay,
+            ok(pat!(InsertResult::Exists(pat!(ExistingEntry::Processing(
+                _
+            )))))
+        );
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn insert_duplicate_returns_in_progress() {
+        let (store, _container) = new_store().await;
+        let key = IdempotencyKey::new("sankara").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
+        let entry = IdempotencyEntry::new(fingerprint, TTL);
+
+        let first = store.try_insert(&key, entry.clone()).await;
+        expect_that!(first, ok(pat!(InsertResult::Claimed { .. })));
+
+        let second = store.try_insert(&key, entry).await;
+        let Ok(InsertResult::Exists(ExistingEntry::Processing(existing))) = second else {
+            panic!("expected Exists(Processing), got {second:?}")
+        };
+        expect_that!(existing.fingerprint, eq(fingerprint));
+        expect_that!(existing.ttl, eq(TTL));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn touch_after_complete_is_rejected() {
+        let (store, _container) = new_store().await;
+        let key = IdempotencyKey::new("sankara").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("/list", &[]);
+        let Ok(InsertResult::Claimed { fencing_token }) = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+        else {
+            panic!("expected a fresh claim");
+        };
+
+        let live = store.touch(&key, fencing_token, TTL).await;
+        expect_that!(live, ok(eq(&FencedOutcome::Applied)));
+
+        let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"ok"), TTL);
+        let applied = store.complete(&key, completed, fencing_token).await;
+        expect_that!(applied, ok(eq(&FencedOutcome::Applied)));
+
+        let rejected = store.touch(&key, fencing_token, TTL).await;
+        expect_that!(rejected, ok(eq(&FencedOutcome::KeyExpired)));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn ping_round_trips() {
+        let (store, _container) = new_store().await;
+        expect_that!(store.ping().await, ok(anything()));
     }
 }

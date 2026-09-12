@@ -1,7 +1,4 @@
-//! At-most-once execution of side effects.
-//!
-//! For a given idempotency key the side effect runs at most once,
-//! and every retry within the TTL window receives the cached response.
+#![doc = include_str!("../README.md")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod entry;

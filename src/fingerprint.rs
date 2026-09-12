@@ -1,4 +1,7 @@
+//! Request fingerprints and the strategies that compute them.
+
 use std::hash::Hash;
+
 use xxhash_rust::xxh3;
 
 /// A hash of the request operation and body.
@@ -37,8 +40,14 @@ const _: () = {
 ///     minor_units: i64,
 /// }
 ///
-/// let charge = Charge { account: "acct_1", minor_units: 250 };
-/// let restated = Charge { account: "acct_1", minor_units: 251 };
+/// let charge = Charge {
+///     account: "account1",
+///     minor_units: 250,
+/// };
+/// let restated = Charge {
+///     account: "account_1",
+///     minor_units: 251,
+/// };
 ///
 /// assert_eq!(body(&charge), body(&charge));
 /// assert_ne!(body(&charge), body(&restated));

@@ -181,3 +181,50 @@ impl<S: IdempotencyStore + Clone> Drop for OwnedClaimGuard<S> {
         self.handle.spawn(recovery);
     }
 }
+
+#[cfg(all(test, feature = "memory"))]
+mod tests {
+    use std::time::Duration;
+
+    use crate::IdempotencyEntry;
+    use crate::IdempotencyKey;
+    use crate::IdempotencyStore;
+    use crate::InsertResult;
+    use crate::fingerprint::DefaultFingerprintStrategy;
+    use crate::fingerprint::FingerprintStrategy;
+    use crate::store::claim::OwnedClaimOutcome;
+    use crate::store::memory::MemoryStore;
+
+    const TTL: Duration = Duration::from_secs(60);
+
+    #[tokio::test]
+    async fn dropped_owned_guard_frees_the_key() {
+        let store = MemoryStore::builder()
+            .try_build()
+            .expect("build memory store");
+        let key = IdempotencyKey::new("dropped").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute("POST /charges", b"{}");
+
+        let outcome = store
+            .claim_owned(key.clone(), IdempotencyEntry::new(fingerprint, TTL))
+            .await
+            .expect("claim");
+        let OwnedClaimOutcome::Claimed(guard) = outcome else {
+            panic!("expected a fresh claim");
+        };
+        drop(guard);
+
+        // Recovery runs on a detached task; give it a bounded chance to land, well inside the TTL.
+        for _ in 0..100 {
+            let attempt = store
+                .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+                .await
+                .expect("insert");
+            match attempt {
+                InsertResult::Claimed { .. } => return,
+                InsertResult::Exists(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+        panic!("the dropped claim was never freed");
+    }
+}

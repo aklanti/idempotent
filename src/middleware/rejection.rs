@@ -1,3 +1,5 @@
+//! The rejections a middleware returns instead of calling the handler.
+
 use crate::Error;
 
 /// The rejection the layer returns instead of calling the handler.

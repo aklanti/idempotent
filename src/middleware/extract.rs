@@ -1,3 +1,5 @@
+//! Idempotency key extraction from a request.
+
 use http::HeaderName;
 use http::request::Parts;
 
