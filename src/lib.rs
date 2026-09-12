@@ -17,6 +17,8 @@ pub use self::entry::CachedResponse;
 #[doc(inline)]
 pub use self::entry::IdempotencyEntry;
 #[doc(inline)]
+pub use self::entry::ReplayOutcome;
+#[doc(inline)]
 pub use self::error::Error;
 #[doc(inline)]
 pub use self::fencing_token::FencedOutcome;

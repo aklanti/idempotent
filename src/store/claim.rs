@@ -12,6 +12,7 @@ use crate::IdempotencyStore;
 use crate::OwnedClaimGuard;
 use crate::entry::ExistingEntry;
 use crate::entry::IdempotencyEntry;
+use crate::entry::ReplayOutcome;
 use crate::fencing_token::FencingToken;
 use crate::fingerprint::DefaultFingerprintStrategy;
 use crate::fingerprint::FingerprintStrategy;
@@ -109,6 +110,8 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
     ///
     /// Returns an error if the side effect fails, or if a store operation fails.
     /// When the side effect fails, the claim is left to expire so a later retry re-runs it.
+    /// When the completion fails, [`Completion`](ExecutionError::Completion) contains the
+    /// response and the claim is left to expire.
     pub async fn execute_or_replay<F, Fut>(
         self,
         completed_ttl: Duration,
@@ -125,10 +128,10 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
                 let response = side_effect(guard.fencing_token())
                     .await
                     .map_err(ExecutionError::SideEffect)?;
-                let verdict = guard
-                    .complete(response.clone(), completed_ttl)
-                    .await
-                    .map_err(ExecutionError::Store)?;
+                let verdict = match guard.complete(response.clone(), completed_ttl).await {
+                    Ok(verdict) => verdict,
+                    Err(source) => return Err(ExecutionError::Completion { source, response }),
+                };
                 let outcome = ExecutionOutcome::from_completion(verdict, response);
                 #[cfg(feature = "tracing")]
                 if let ExecutionOutcome::Fenced { rejection, .. } = &outcome {
@@ -143,7 +146,7 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
             ClaimOutcome::Exists {
                 existing,
                 fingerprint,
-            } => Ok(replay_outcome(existing, fingerprint)),
+            } => Ok(existing.replay(fingerprint).into()),
         }
     }
 }
@@ -229,7 +232,9 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, WithFingerprint> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the side effect fails, or if a store operation fails.
+    /// Returns an error if the side effect fails, or if a store operation fails. When the
+    /// completion fails, [`Completion`](ExecutionError::Completion) contains the response and
+    /// the claim is left to expire.
     ///
     /// # Panics
     ///
@@ -254,10 +259,10 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, WithFingerprint> {
                         return Err(ExecutionError::SideEffect(error));
                     }
                 };
-                let verdict = guard
-                    .complete(response.clone(), completed_ttl)
-                    .await
-                    .map_err(ExecutionError::Store)?;
+                let verdict = match guard.complete(response.clone(), completed_ttl).await {
+                    Ok(verdict) => verdict,
+                    Err(source) => return Err(ExecutionError::Completion { source, response }),
+                };
                 let outcome = ExecutionOutcome::from_completion(verdict, response);
                 #[cfg(feature = "tracing")]
                 if let ExecutionOutcome::Fenced { rejection, .. } = &outcome {
@@ -272,7 +277,7 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, WithFingerprint> {
             OwnedClaimOutcome::Exists {
                 existing,
                 fingerprint,
-            } => Ok(replay_outcome(existing, fingerprint)),
+            } => Ok(existing.replay(fingerprint).into()),
         }
     }
 }
@@ -340,24 +345,30 @@ impl ExecutionOutcome {
 /// Error when executing or replaying the operation.
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError<E> {
-    /// The store operation failed.
+    /// The store failed before the side effect ran.
     #[error("store operation failed")]
     Store(#[source] E),
     /// The side effect returned an error.
     #[error("side effect failed")]
     SideEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The store failed after the side effect ran, and nothing was cached.
+    #[error("completion failed after the side effect ran")]
+    Completion {
+        /// The store error.
+        #[source]
+        source: E,
+        /// The response the side effect produced.
+        response: CachedResponse,
+    },
 }
 
-/// Maps an existing entry against the request's fingerprint.
-fn replay_outcome(existing: ExistingEntry, fingerprint: Fingerprint) -> ExecutionOutcome {
-    match existing {
-        ExistingEntry::Completed(entry) if entry.fingerprint == fingerprint => {
-            ExecutionOutcome::Replayed(entry.into_response())
+impl From<ReplayOutcome> for ExecutionOutcome {
+    fn from(outcome: ReplayOutcome) -> Self {
+        match outcome {
+            ReplayOutcome::Replayed(response) => Self::Replayed(response),
+            ReplayOutcome::InFlight => Self::InFlight,
+            ReplayOutcome::FingerprintMismatch => Self::FingerprintMismatch,
         }
-        ExistingEntry::Processing(entry) if entry.fingerprint == fingerprint => {
-            ExecutionOutcome::InFlight
-        }
-        _ => ExecutionOutcome::FingerprintMismatch,
     }
 }
 
@@ -608,5 +619,35 @@ mod tests {
                 .fingerprint(OPERATION, b"{}")
                 .execute_or_replay(COMPLETED_TTL, |_token| async move { Ok(created(b"moved")) }),
         );
+    }
+
+    #[tokio::test]
+    async fn completion_failure_returns_the_response() {
+        // The store's task lives on its own runtime, which the side effect shuts down, so the
+        // completion finds the task gone.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let store = MemoryStore::builder()
+            .runtime(runtime.handle().clone())
+            .try_build()
+            .expect("build memory store");
+        let key = IdempotencyKey::new("lost-store").expect("valid key");
+
+        let failed = store
+            .claim(&key, PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{}")
+            .execute_or_replay(COMPLETED_TTL, move |_token| async move {
+                runtime.shutdown_background();
+                Ok(created(b"lost"))
+            })
+            .await;
+
+        let Err(ExecutionError::Completion { response, .. }) = failed else {
+            panic!("expected the completion to fail");
+        };
+        assert_eq!(response, created(b"lost"));
     }
 }

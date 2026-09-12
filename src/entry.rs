@@ -104,6 +104,33 @@ pub enum ExistingEntry {
     Completed(IdempotencyEntry<Completed>),
 }
 
+/// A response to a retry from the entry with the key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplayOutcome {
+    /// The cached response of the same request.
+    Replayed(CachedResponse),
+    /// The same request is still being processed.
+    InFlight,
+    /// A different request holds the key.
+    FingerprintMismatch,
+}
+
+impl ExistingEntry {
+    /// Answers a retry whose request has `fingerprint`.
+    ///
+    /// A completed entry with the same fingerprint replays its response, a processing entry
+    /// with the same fingerprint is in flight, and any other entry is a mismatch.
+    pub fn replay(self, fingerprint: Fingerprint) -> ReplayOutcome {
+        match self {
+            Self::Completed(entry) if entry.fingerprint == fingerprint => {
+                ReplayOutcome::Replayed(entry.into_response())
+            }
+            Self::Processing(entry) if entry.fingerprint == fingerprint => ReplayOutcome::InFlight,
+            _ => ReplayOutcome::FingerprintMismatch,
+        }
+    }
+}
+
 impl EntryState for Processing {}
 impl sealed::Sealed for Processing {}
 
@@ -151,5 +178,31 @@ mod tests {
         expect_that!(completed.fingerprint, eq(fingerprint));
         expect_that!(completed.ttl, eq(Duration::from_secs(60)));
         expect_that!(completed.state, eq(&Completed { response }));
+    }
+
+    #[gtest]
+    fn replay_answers_all_three_cases() {
+        let fingerprint = Fingerprint(1);
+        let response = CachedResponse {
+            status_code: 200,
+            metadata: Metadata::default(),
+            body: vec![].into(),
+        };
+        let completed = IdempotencyEntry::new(fingerprint, Duration::from_secs(30))
+            .complete(response.clone(), Duration::from_secs(60));
+        let processing = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
+
+        expect_that!(
+            ExistingEntry::Completed(completed.clone()).replay(fingerprint),
+            eq(&ReplayOutcome::Replayed(response))
+        );
+        expect_that!(
+            ExistingEntry::Processing(processing).replay(fingerprint),
+            eq(&ReplayOutcome::InFlight)
+        );
+        expect_that!(
+            ExistingEntry::Completed(completed).replay(Fingerprint(2)),
+            eq(&ReplayOutcome::FingerprintMismatch)
+        );
     }
 }
