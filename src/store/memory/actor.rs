@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
-use std::time::Instant;
 
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 use super::InsertResult;
 use super::command::Command;

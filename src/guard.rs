@@ -1,4 +1,5 @@
 //! Borrowed and owned claim guards for cancellation-safe completion.
+use std::convert::Infallible;
 use std::time::Duration;
 
 use tokio::runtime::Handle;
@@ -71,6 +72,14 @@ impl<S: IdempotencyStore> ClaimGuard<'_, S> {
         self.store
             .complete(self.key, entry, self.fencing_token)
             .await
+    }
+
+    /// Renews the lease every half lease until the ceiling or a lost lease, then waits forever.
+    ///
+    /// A store error is logged and the renewal continues. A zero lease is not renewed. Dropping
+    /// the future mid touch is safe.
+    pub async fn keep_alive(&self, lease: Duration, ceiling: Duration) -> Infallible {
+        renew(|ttl| self.touch(ttl), self.key, lease, ceiling).await
     }
 }
 
@@ -155,6 +164,14 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
     pub fn leave(mut self) {
         self.recover_on_drop = false;
     }
+
+    /// Renews the lease every half lease until the ceiling or a lost lease, then waits forever.
+    ///
+    /// A store error is logged and the renewal continues. A zero lease is not renewed. Dropping
+    /// the future mid touch is safe.
+    pub async fn keep_alive(&self, lease: Duration, ceiling: Duration) -> Infallible {
+        renew(|ttl| self.touch(ttl), &self.key, lease, ceiling).await
+    }
 }
 
 impl<S: IdempotencyStore + Clone> Drop for OwnedClaimGuard<S> {
@@ -190,6 +207,48 @@ impl<S: IdempotencyStore + Clone> Drop for OwnedClaimGuard<S> {
 
         self.handle.spawn(recovery);
     }
+}
+
+/// Renews the lease every half lease until the ceiling or a lost lease, then waits forever.
+async fn renew<F, Fut, E>(
+    mut touch: F,
+    key: &IdempotencyKey,
+    lease: Duration,
+    ceiling: Duration,
+) -> Infallible
+where
+    F: FnMut(Duration) -> Fut,
+    Fut: Future<Output = Result<FencedOutcome, E>>,
+    E: std::fmt::Display,
+{
+    #[cfg(not(feature = "tracing"))]
+    let _ = key;
+    let interval = lease / 2;
+    if interval.is_zero() {
+        return std::future::pending().await;
+    }
+    let renewals = async {
+        loop {
+            tokio::time::sleep(interval).await;
+            match touch(lease).await {
+                Ok(FencedOutcome::Applied) => {}
+                Ok(_lost) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!(key = %key, outcome = ?_lost, "the processing lease was lost");
+                    return;
+                }
+                Err(_error) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!(key = %key, error = %_error, "failed to renew the processing lease");
+                }
+            }
+        }
+    };
+    if tokio::time::timeout(ceiling, renewals).await.is_err() {
+        #[cfg(feature = "tracing")]
+        tracing::warn!(key = %key, "keep-alive ceiling reached, the lease will lapse");
+    }
+    std::future::pending().await
 }
 
 #[cfg(all(test, feature = "memory"))]

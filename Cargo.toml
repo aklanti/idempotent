@@ -31,7 +31,7 @@ http-body-util = { version = "0.1", optional = true }
 postcard = { version = "1", optional = true, features = ["alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
-tokio = { version = "1", features = ["sync", "rt"] }
+tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
 tonic = { version = "0.14", default-features = false, optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
 tracing = { version = "0.1", optional = true }
@@ -48,7 +48,7 @@ optional = true
 googletest = "0.14"
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["valkey"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 
 [lints.clippy]
 allow_attributes_without_reason = "warn"
