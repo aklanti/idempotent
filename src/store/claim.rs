@@ -192,11 +192,7 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
 ///         .claim_owned(key, Duration::from_secs(30))
 ///         .fingerprint("POST /credentials/issue", b"{}")
 ///         .execute_or_replay(Duration::from_secs(60), |_token| async {
-///             Ok(CachedResponse {
-///                 status_code: 201,
-///                 metadata: Metadata::new(),
-///                 body: b"issued".to_vec().into(),
-///             })
+///             Ok(CachedResponse::new(201, Metadata::new(), b"issued".to_vec().into()))
 ///         }),
 /// )
 /// .await??;

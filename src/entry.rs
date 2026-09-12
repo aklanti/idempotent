@@ -43,11 +43,7 @@ impl IdempotencyEntry<Processing> {
     /// # use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
     /// let fingerprint = DefaultFingerprintStrategy.compute(&"/get".into(), &[2]);
     /// let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
-    /// let response = CachedResponse {
-    ///     status_code: 200,
-    ///     metadata: Metadata::default(),
-    ///     body: vec![].into(),
-    /// };
+    /// let response = CachedResponse::new(200, Metadata::default(), vec![].into());
     /// let _ = entry.complete(response, Duration::from_secs(86_400));
     /// ```
     #[must_use]
@@ -77,6 +73,7 @@ impl IdempotencyEntry<Completed> {
 }
 
 /// A cached response for a completed idempotency entry.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CachedResponse {
@@ -86,6 +83,17 @@ pub struct CachedResponse {
     pub metadata: Metadata,
     /// The response body.
     pub body: Bytes,
+}
+
+impl CachedResponse {
+    /// Creates a cached response from its status code, metadata, and body.
+    pub const fn new(status_code: u16, metadata: Metadata, body: Bytes) -> Self {
+        Self {
+            status_code,
+            metadata,
+            body,
+        }
+    }
 }
 
 /// The request is currently being processed

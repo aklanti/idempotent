@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replace `MemoryStore::new(buffer, sweep_interval)` with `MemoryStore::builder()` and `try_build`, which fails with `MemoryStoreError` on a zero buffer, a zero sweep interval, or a missing runtime instead of panicking
 - Replace `ValkeyStore::new` and `with_prefix` with the `with_client`, `with_connection_manager`, and `with_url` builders, and rename `key_prefix` to `prefix`, which rejects a reserved character with `ValkeyError::InvalidPrefix`
 - Remove the `tokio` feature; tokio is a dependency of the crate, and `memory` needs no feature to enable it
+- Mark `Error` and `CachedResponse` `#[non_exhaustive]`; `CachedResponse::new` builds one from its status code, metadata, and body
 
 ### Features
 

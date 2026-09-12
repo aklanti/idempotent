@@ -41,11 +41,11 @@ use idempotent::Metadata;
 
 /// Signs the credential and returns it as the response to cache.
 async fn issue_credential() -> CachedResponse {
-    CachedResponse {
-        status_code: 201,
-        metadata: Metadata::new(),
-        body: br#"{"type": "UniversityDegreeCredential", "proof": "..."}"#.to_vec().into(),
-    }
+    CachedResponse::new(
+        201,
+        Metadata::new(),
+        br#"{"type": "UniversityDegreeCredential", "proof": "..."}"#.to_vec().into(),
+    )
 }
 
 #[tokio::main]

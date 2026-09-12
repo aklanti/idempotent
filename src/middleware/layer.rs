@@ -20,13 +20,14 @@ use http_body::Body;
 use http_body_util::BodyExt;
 use http_body_util::LengthLimitError;
 use http_body_util::Limited;
+use sha2::Digest;
+use sha2::Sha256;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 use tower::Layer;
 use tower::Service;
-use xxhash_rust::xxh3::xxh3_128;
 
 use super::rejection::IdempotencyRejection;
 use crate::CachedResponse;
@@ -759,16 +760,15 @@ impl<S: IdempotencyStore> IdempotencyStore for TimeoutStore<S> {
 
 /// Returns the key the layer stores for a client's `key` when `scope` identifies the caller.
 ///
-/// The stored key is the thirty-two hex digits of the scope's 128-bit hash, a slash, and the
-/// client's key. Because the scope is hashed, a caller identifier may contain any character,
-/// is never written to the store as itself, and prefixes every entry of that caller. The
-/// stored key must fit 255 bytes, so `key` may be at most 222 bytes.
-///
 /// # Errors
 ///
 /// Returns an error if the stored key exceeds 255 bytes.
 pub fn stored_key(scope: &str, key: &IdempotencyKey) -> Result<IdempotencyKey, Error> {
-    IdempotencyKey::new(format!("{:032x}", xxh3_128(scope.as_bytes())))?.scoped(key.as_str())
+    let digest = Sha256::digest(scope.as_bytes());
+    let truncated = digest[..16]
+        .iter()
+        .fold(0u128, |acc, &byte| (acc << 8) | u128::from(byte));
+    IdempotencyKey::new(format!("{truncated:032x}"))?.scoped(key.as_str())
 }
 
 /// The keep-alive header, which the http crate has no constant for.

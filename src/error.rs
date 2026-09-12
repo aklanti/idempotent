@@ -1,4 +1,5 @@
 /// The error returned by fallible idempotency operations.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The key is empty.
