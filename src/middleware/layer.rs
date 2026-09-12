@@ -16,16 +16,16 @@ use crate::Metadata;
 /// A boxed error, what the body traits deal in.
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Prefixes `key` with the hash of `scope`, the way the layer stores it.
+/// Returns the key the layer stores for a client's `key` when `scope` identifies the caller.
 ///
 /// The stored key is the thirty-two hex digits of the scope's 128-bit hash, a slash, and the
-/// client's key. Any caller identifier makes a valid segment, none is stored as itself, and one
-/// caller's entries share a prefix. A scoped key must fit 255 bytes in total, so `key` may be
-/// at most 222 bytes.
+/// client's key. Because the scope is hashed, a caller identifier may contain any character,
+/// is never written to the store as itself, and prefixes every entry of that caller. The
+/// stored key must fit 255 bytes, so `key` may be at most 222 bytes.
 ///
 /// # Errors
 ///
-/// Returns an error if the scoped key exceeds 255 bytes.
+/// Returns an error if the stored key exceeds 255 bytes.
 pub fn stored_key(scope: &str, key: &IdempotencyKey) -> Result<IdempotencyKey, Error> {
     IdempotencyKey::new(format!("{:032x}", xxh3_128(scope.as_bytes())))?.scoped(key.as_str())
 }
@@ -33,10 +33,10 @@ pub fn stored_key(scope: &str, key: &IdempotencyKey) -> Result<IdempotencyKey, E
 /// The `keep-alive` header, which has no constant in `http`.
 const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 
-/// Copies the headers worth replaying into the storable [`Metadata`] representation.
+/// Copies the headers worth replaying into [`Metadata`].
 ///
-/// Hop-by-hop headers describe the connection that carried the original response, and `date`
-/// is set afresh by the server, so neither is stored.
+/// Hop-by-hop headers describe the connection that carried the response, and `date` is set
+/// afresh by the server, so neither is stored.
 fn storable_headers(headers: &HeaderMap) -> Metadata {
     headers
         .iter()
@@ -50,7 +50,7 @@ fn storable_headers(headers: &HeaderMap) -> Metadata {
         .collect()
 }
 
-/// Whether a header belongs to the connection rather than the response.
+/// Returns true if a header belongs to the connection rather than the response.
 fn is_connection_specific(name: &HeaderName) -> bool {
     [
         header::CONNECTION,
