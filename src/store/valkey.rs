@@ -6,7 +6,7 @@
 //! The server must have AOF persistence enabled (`appendonly yes`) and eviction disabled
 //! because a silent eviction under memory pressure breaks the at-most-once guarantee.
 //!
-//! The fencing tokens has an associated server ID, so a token issued before a restart or a
+//! The fencing tokens have an associated server ID, so a token issued before a restart or a
 //! failover never matches one issued after it.
 
 use std::fmt;
