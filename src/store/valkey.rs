@@ -5,6 +5,8 @@
 //!
 //! The server must have AOF persistence enabled (`appendonly yes`) and eviction disabled
 //! because a silent eviction under memory pressure breaks the at-most-once guarantee.
+//! Valkey Cluster is not supported, because the claim script writes the entry and the
+//! fencing-token counter, two keys in different slots, which a cluster refuses.
 //!
 //! The fencing tokens have an associated server ID, so a token issued before a restart or a
 //! failover never matches one issued after it.
@@ -670,6 +672,44 @@ mod tests {
 
         let rejected = store.touch(&key, fencing_token, TTL).await;
         expect_that!(rejected, ok(eq(&FencedOutcome::KeyExpired)));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn remove_requires_the_token_and_purge_does_not() {
+        let (store, _container) = new_store().await;
+        let key = IdempotencyKey::new("sankara").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/list".into(), &[]);
+        let Ok(InsertResult::Claimed { fencing_token }) = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+        else {
+            panic!("expected a fresh claim");
+        };
+
+        let foreign = FencingToken::new(fencing_token.run_id, fencing_token.sequence + 1);
+        expect_that!(
+            store.remove(&key, foreign).await,
+            ok(eq(&FencedOutcome::FencingMismatch))
+        );
+        expect_that!(
+            store.remove(&key, fencing_token).await,
+            ok(eq(&FencedOutcome::Applied))
+        );
+        expect_that!(
+            store.remove(&key, fencing_token).await,
+            ok(eq(&FencedOutcome::KeyExpired))
+        );
+
+        let reclaimed = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await;
+        expect_that!(reclaimed, ok(pat!(InsertResult::Claimed { .. })));
+        expect_that!(store.purge(&key).await, ok(anything()));
+        let free = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await;
+        expect_that!(free, ok(pat!(InsertResult::Claimed { .. })));
     }
 
     #[gtest]

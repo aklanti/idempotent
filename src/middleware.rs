@@ -5,6 +5,11 @@
 //! otherwise. A request without one is forwarded untouched, and so is any request with a safe
 //! method, since there is no side effect to protect.
 //!
+//! The wrapped service sees the request body it was given and returns its own response body,
+//! both bounded by `From<Bytes>`, which axum's body and `Full<Bytes>` implement. hyper's
+//! `Incoming` does not, so a plain hyper server maps its body first. Each request with a key
+//! runs in a spawned task, so the service must be called inside a Tokio runtime.
+//!
 //! # What a request with a key gets
 //!
 //! The body is buffered under the size cap and fingerprinted with the method, the path, the

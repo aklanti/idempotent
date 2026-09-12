@@ -16,7 +16,7 @@ features = ["axum", "memory", "middleware", "serde", "tracing", "uuid", "valkey"
 [features]
 axum = ["dep:axum", "middleware"]
 default = ["uuid"]
-memory = ["tokio/time", "tokio/macros"]
+memory = []
 middleware = [
     "dep:http",
     "dep:http-body",

@@ -72,7 +72,11 @@ impl MemoryStore {
         }
     }
 
-    /// The number of entries in memory.
+    /// Returns the number of entries in memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the background task has stopped.
     pub async fn len(&self) -> Result<usize, MemoryStoreError> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -206,6 +210,10 @@ impl IdempotencyStore for MemoryStore {
         rx.await.map_err(|_| MemoryStoreError::TaskStopped)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "MemoryStore::purge", skip(self), fields(key = %key), err(Display))
+    )]
     async fn purge(&self, key: &IdempotencyKey) -> Result<(), Self::Error> {
         let (reply, rx) = oneshot::channel();
         let cmd = Command::Purge {
@@ -306,7 +314,7 @@ mod tests {
     }
 
     #[gtest]
-    fn insert_vacant_return_a_claim_with_fencing_token() {
+    fn insert_on_vacant_key_returns_a_claim() {
         let mut store = MemoryStoreActor::new();
         let key = IdempotencyKey::new("chimamanda").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);

@@ -168,7 +168,7 @@ If the process dies after the side effect ran but before the completion was stor
 
 ### Running on Valkey
 
-Enable AOF persistence (`appendonly yes`) and disable eviction (`maxmemory-policy noeviction`): an evicted key loses its claim, and the retry runs again. Use a single node. A failover to a replica changes the server's run id, so attempts started on the old primary are fenced after promotion, but claims that had not replicated are gone with their keys. With `appendfsync everysec` a crash can still lose the last second of claims; `appendfsync always` closes that window at one fsync per claim.
+Enable AOF persistence (`appendonly yes`) and disable eviction (`maxmemory-policy noeviction`): an evicted key loses its claim, and the retry runs again. Use a single node; Valkey Cluster is not supported, because the claim script writes the entry and the fencing-token counter, two keys in different slots, which a cluster refuses. A failover to a replica changes the server's run id, so attempts started on the old primary are fenced after promotion, but claims that had not replicated are gone with their keys. With `appendfsync everysec` a crash can still lose the last second of claims; `appendfsync always` closes that window at one fsync per claim.
 
 `with_url` builds a store from a connection string; `with_client` and `with_connection_manager` take a redis client or a manager the application already holds. Every connection attempt and every command is bounded, five seconds each by default:
 

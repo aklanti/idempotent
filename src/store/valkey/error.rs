@@ -11,7 +11,7 @@ pub enum ValkeyError {
     #[error("decode error")]
     Decode(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// The key prefix is invalid.
-    #[error("service-name prefix {0:?} contains a reserved separator (':' or '/')")]
+    #[error("prefix {0:?} contains a reserved separator (':' or '/')")]
     InvalidPrefix(String),
     /// The connection URL could not be parsed.
     #[error("invalid connection url")]

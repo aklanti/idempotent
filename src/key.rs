@@ -164,6 +164,23 @@ mod tests {
         expect_that!(result, err(pat!(Error::KeyTooLong(anything()))));
     }
 
+    #[gtest]
+    fn key_with_reserved_character_is_rejected() {
+        expect_that!(
+            IdempotencyKey::new("tenant:key"),
+            err(pat!(Error::InvalidKey))
+        );
+        expect_that!(
+            IdempotencyKey::new("offer/8f21"),
+            err(pat!(Error::InvalidKey))
+        );
+        expect_that!(
+            IdempotencyKey::new("offer\n8f21"),
+            err(pat!(Error::InvalidKey))
+        );
+        expect_that!(IdempotencyKey::new("offre-\u{e9}t\u{e9}"), ok(anything()));
+    }
+
     #[cfg(feature = "uuid")]
     #[gtest]
     fn default_key_is_valid_uuid() {

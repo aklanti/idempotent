@@ -1,5 +1,6 @@
 //! The HTTP idempotency middleware.
 
+use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -104,7 +105,9 @@ impl<S> Settings<S> {
         let Some(hook) = &self.scope else {
             return Ok(key);
         };
-        let scope = hook(parts).ok_or(IdempotencyRejection::MissingScope)?;
+        let scope = hook(parts)
+            .filter(|scope| !scope.is_empty())
+            .ok_or(IdempotencyRejection::MissingScope)?;
         stored_key(&scope, &key).map_err(IdempotencyRejection::InvalidKey)
     }
 
@@ -230,7 +233,7 @@ impl<S> IdempotencyLayer<S> {
     /// presents a key with the same request gets the cached response, so a service with more
     /// than one client needs one. The stored key is what [`stored_key`] builds from the scope
     /// and the client's key, which limits the client's key to 222 bytes. When the hook returns
-    /// nothing, the request is rejected with 400.
+    /// nothing, or an empty string, the request is rejected with 400.
     pub fn scope<F>(mut self, hook: F) -> Self
     where
         F: Fn(&Parts) -> Option<String> + Send + Sync + 'static,
@@ -259,9 +262,9 @@ impl<S> IdempotencyLayer<S> {
 
     /// Caps the requests with a key running at once, answering 503 past the cap.
     ///
-    /// No cap by default. The work for a request with a key outlives the response future, so
-    /// this is the one limit that sees it; a limit outside the layer does not. A request shed
-    /// here has made no store call.
+    /// No cap by default, and a cap of zero sheds every request with a key. The work for a
+    /// request with a key outlives the response future, so this is the one limit that sees it;
+    /// a limit outside the layer does not. A request shed here has made no store call.
     pub fn max_in_flight(mut self, limit: usize) -> Self {
         self.settings.max_in_flight = Arc::new(Semaphore::new(limit));
         self
@@ -281,6 +284,21 @@ impl<S> IdempotencyLayer<S> {
     }
 }
 
+impl<S> fmt::Debug for IdempotencyLayer<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IdempotencyLayer")
+            .field("header", &self.settings.header)
+            .field("processing_ttl", &self.settings.processing_ttl)
+            .field("completed_ttl", &self.settings.completed_ttl)
+            .field("max_body_size", &self.settings.max_body_size)
+            .field("require_key", &self.settings.require_key)
+            .field("scoped", &self.settings.scope.is_some())
+            .field("store_timeout", &self.settings.store.timeout)
+            .field("keep_alive", &self.settings.keep_alive)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<S: Clone, Inner> Layer<Inner> for IdempotencyLayer<S> {
     type Service = IdempotencyService<S, Inner>;
 
@@ -293,10 +311,23 @@ impl<S: Clone, Inner> Layer<Inner> for IdempotencyLayer<S> {
 }
 
 /// The service [`IdempotencyLayer`] builds around the inner one.
+///
+/// # Panics
+///
+/// Calling it outside a Tokio runtime panics, since each request with a key runs in a spawned
+/// task.
 #[derive(Clone)]
 pub struct IdempotencyService<S, Inner> {
     inner: Inner,
     settings: Arc<Settings<S>>,
+}
+
+impl<S, Inner: fmt::Debug> fmt::Debug for IdempotencyService<S, Inner> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IdempotencyService")
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<S, Inner, ReqBody, ResBody> Service<Request<ReqBody>> for IdempotencyService<S, Inner>
@@ -491,15 +522,12 @@ where
         tracing::warn!("response is streaming or over the cache cap, returning it uncached");
         return Ok(Response::from_parts(parts, body));
     }
-    let bytes = match body.collect().await {
+    let bytes = match Limited::new(body, settings.max_body_size).collect().await {
         Ok(collected) => collected.to_bytes(),
         Err(_error) => {
             outcome("error");
             #[cfg(feature = "tracing")]
-            {
-                let error: BoxError = _error.into();
-                tracing::warn!(error = %error, "response body failed while it was read for the cache");
-            }
+            tracing::warn!(error = %_error, "response body failed while it was read for the cache");
             return Ok(IdempotencyRejection::ResponseBodyFailed.render());
         }
     };
@@ -596,6 +624,12 @@ pin_project_lite::pin_project! {
         Passthrough { #[pin] future: F },
         Rejected { response: Option<Response<B>> },
         Detached { task: JoinHandle<Result<Response<B>, E>> },
+    }
+}
+
+impl<F, B, E> fmt::Debug for ResponseFuture<F, B, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResponseFuture").finish_non_exhaustive()
     }
 }
 

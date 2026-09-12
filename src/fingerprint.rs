@@ -129,7 +129,7 @@ mod tests {
     use super::*;
 
     #[gtest]
-    fn field_sepration_prevent_collision() {
+    fn field_separation_prevents_collision() {
         let strat = DefaultFingerprintStrategy;
         let f1 = strat.compute(&"GET/ab".into(), b"");
         let f2 = strat.compute(&"GET".into(), b"/ab");
