@@ -66,4 +66,4 @@ alias c := clippy
 [group('test')]
 @test *args:
     cargo nextest run --all-features -j 12 {{ args }}
-    cargo test --doc
+    cargo test --doc --all-features
