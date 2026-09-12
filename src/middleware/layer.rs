@@ -304,24 +304,50 @@ where
         }
         let key = match self.settings.client_key(request.headers()) {
             Ok(Some(key)) => key,
-            Ok(None) => return ResponseFuture::passthrough(inner.call(request)),
-            Err(rejection) => return ResponseFuture::rejected(rejection),
+            Ok(None) => {
+                #[cfg(feature = "tracing")]
+                tracing::trace!("no idempotency key, passing through");
+                return ResponseFuture::passthrough(inner.call(request));
+            }
+            Err(rejection) => {
+                #[cfg(feature = "tracing")]
+                tracing::warn!(rejection = rejection.code(), "request rejected");
+                return ResponseFuture::rejected(rejection);
+            }
         };
         let (parts, body) = request.into_parts();
         let key = match self.settings.scoped_key(&parts, key) {
             Ok(key) => key,
-            Err(rejection) => return ResponseFuture::rejected(rejection),
+            Err(rejection) => {
+                #[cfg(feature = "tracing")]
+                tracing::warn!(rejection = rejection.code(), "request rejected");
+                return ResponseFuture::rejected(rejection);
+            }
         };
+        #[cfg(feature = "tracing")]
+        let span = tracing::info_span!(
+            "idempotent.middleware",
+            idempotency_key = %key,
+            http.method = %parts.method,
+            url.path = parts.uri.path(),
+            outcome = tracing::field::Empty,
+        );
         let permit = match self.settings.admit() {
             Ok(permit) => permit,
-            Err(rejection) => return ResponseFuture::rejected(rejection),
+            Err(rejection) => {
+                #[cfg(feature = "tracing")]
+                {
+                    span.record("outcome", "overloaded");
+                    tracing::warn!(parent: &span, "max_in_flight reached, shedding");
+                }
+                return ResponseFuture::rejected(rejection);
+            }
         };
         let settings = Arc::clone(&self.settings);
-        let task = self
-            .settings
-            .tracker
-            .spawn(run(settings, inner, parts, body, key, permit));
-        ResponseFuture::detached(task)
+        let future = run(settings, inner, parts, body, key, permit);
+        #[cfg(feature = "tracing")]
+        let future = tracing::Instrument::instrument(future, span);
+        ResponseFuture::detached(self.settings.tracker.spawn(future))
     }
 }
 
@@ -346,8 +372,18 @@ where
 {
     let bytes = match buffer(body, settings.max_body_size).await {
         Ok(Buffered::Bytes(bytes)) => bytes,
-        Ok(Buffered::TooLarge) => return Ok(IdempotencyRejection::BodyTooLarge.render()),
-        Err(_error) => return Ok(IdempotencyRejection::RequestBodyFailed.render()),
+        Ok(Buffered::TooLarge) => {
+            outcome("rejected");
+            #[cfg(feature = "tracing")]
+            tracing::warn!("request body exceeds max_body_size");
+            return Ok(IdempotencyRejection::BodyTooLarge.render());
+        }
+        Err(_error) => {
+            outcome("rejected");
+            #[cfg(feature = "tracing")]
+            tracing::warn!(error = %_error, "request body failed");
+            return Ok(IdempotencyRejection::RequestBodyFailed.render());
+        }
     };
     let claim = settings
         .store
@@ -360,24 +396,54 @@ where
             fingerprint,
         }) => {
             return Ok(match existing.replay(fingerprint) {
-                ReplayOutcome::Replayed(cached) => replay(cached),
-                ReplayOutcome::InFlight => IdempotencyRejection::InFlight.render(),
+                ReplayOutcome::Replayed(cached) => {
+                    outcome("replayed");
+                    #[cfg(feature = "tracing")]
+                    tracing::info!("replaying cached response");
+                    replay(cached)
+                }
+                ReplayOutcome::InFlight => {
+                    outcome("in_flight");
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!("request in flight, returning 409");
+                    IdempotencyRejection::InFlight.render()
+                }
                 ReplayOutcome::FingerprintMismatch => {
+                    outcome("mismatch");
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!("fingerprint mismatch, returning 400");
                     IdempotencyRejection::FingerprintMismatch.render()
                 }
             });
         }
-        Err(_error) => return Ok(IdempotencyRejection::StoreError.render()),
+        Err(error) => {
+            outcome("error");
+            store_failed("claim", &error);
+            return Ok(IdempotencyRejection::StoreError.render());
+        }
     };
 
     let request = Request::from_parts(parts, ReqBody::from(bytes));
     let response = tokio::select! {
-        result = inner.call(request) => result?,
+        result = inner.call(request) => match result {
+            Ok(response) => response,
+            Err(error) => {
+                outcome("error");
+                return Err(error);
+            }
+        },
         never = guard.keep_alive(settings.processing_ttl, settings.keep_alive) => match never {},
     };
 
     if declines_caching(response.headers()) {
-        let _removed = settings.store.remove(&key, guard.fencing_token()).await;
+        outcome("declined");
+        match settings.store.remove(&key, guard.fencing_token()).await {
+            Ok(_) => {
+                #[cfg(feature = "tracing")]
+                tracing::info!("handler declined caching, claim released");
+            }
+            Err(error) => store_failed("release", &error),
+        }
         return Ok(response);
     }
     let (parts, body) = response.into_parts();
@@ -387,20 +453,73 @@ where
         .and_then(|upper| usize::try_from(upper).ok())
         .is_some_and(|upper| upper <= settings.max_body_size);
     if !fits {
+        outcome("uncached");
+        #[cfg(feature = "tracing")]
+        tracing::warn!("response is streaming or over the cache cap, returning it uncached");
         return Ok(Response::from_parts(parts, body));
     }
     let bytes = match body.collect().await {
         Ok(collected) => collected.to_bytes(),
-        Err(_error) => return Ok(IdempotencyRejection::ResponseBodyFailed.render()),
+        Err(_error) => {
+            outcome("error");
+            #[cfg(feature = "tracing")]
+            {
+                let error: BoxError = _error.into();
+                tracing::warn!(error = %error, "response body failed while it was read for the cache");
+            }
+            return Ok(IdempotencyRejection::ResponseBodyFailed.render());
+        }
     };
     let cached = CachedResponse {
         status_code: parts.status.as_u16(),
         metadata: storable_headers(&parts.headers),
         body: bytes.clone(),
     };
-    let _completed = guard.complete(cached, settings.completed_ttl).await;
+    match guard.complete(cached, settings.completed_ttl).await {
+        Ok(FencedOutcome::Applied) => {
+            outcome("executed");
+            #[cfg(feature = "tracing")]
+            tracing::debug!("executed, response cached");
+        }
+        Ok(_rejection) => {
+            outcome("fenced");
+            #[cfg(feature = "tracing")]
+            tracing::warn!(rejection = ?_rejection, "the store rejected the completion after the handler ran");
+        }
+        Err(error) => {
+            outcome("uncached");
+            store_failed("completion", &error);
+        }
+    }
     Ok(Response::from_parts(parts, ResBody::from(bytes)))
 }
+
+/// Records the outcome of the request on its span.
+#[cfg(feature = "tracing")]
+fn outcome(value: &'static str) {
+    tracing::Span::current().record("outcome", value);
+}
+
+/// Records the outcome of the request on its span.
+#[cfg(not(feature = "tracing"))]
+const fn outcome(_value: &'static str) {}
+
+/// Logs a failed store call at error, telling a timeout from a failure.
+#[cfg(feature = "tracing")]
+fn store_failed<E: std::fmt::Display>(operation: &'static str, error: &TimeoutStoreError<E>) {
+    match error {
+        TimeoutStoreError::Store(source) => {
+            tracing::error!(operation, error = %source, "store operation failed");
+        }
+        TimeoutStoreError::Elapsed(timeout) => {
+            tracing::error!(operation, ?timeout, "store operation timed out");
+        }
+    }
+}
+
+/// Logs a failed store call at error, telling a timeout from a failure.
+#[cfg(not(feature = "tracing"))]
+const fn store_failed<E>(_operation: &'static str, _error: &TimeoutStoreError<E>) {}
 
 /// Rebuilds a cached response and marks it as replayed.
 fn replay<B: From<Bytes>>(cached: CachedResponse) -> Response<B> {
@@ -488,7 +607,11 @@ where
             KindProj::Detached { task } => match std::task::ready!(Pin::new(task).poll(cx)) {
                 Ok(result) => Poll::Ready(result),
                 Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-                Err(_cancelled) => Poll::Ready(Ok(IdempotencyRejection::Shutdown.render())),
+                Err(_cancelled) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!("runtime shut down before the handler finished");
+                    Poll::Ready(Ok(IdempotencyRejection::Shutdown.render()))
+                }
             },
         }
     }
