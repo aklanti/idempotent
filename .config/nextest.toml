@@ -1,0 +1,6 @@
+[test-groups]
+containers = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "test(valkey)"
+test-group = "containers"
