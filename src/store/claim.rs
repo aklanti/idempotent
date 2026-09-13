@@ -725,9 +725,15 @@ mod tests {
         let failed = store
             .claim(&key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
-            .execute_or_replay(COMPLETED_TTL, move |_token| async move {
-                runtime.shutdown_background();
-                Ok(created(b"lost"))
+            .execute_or_replay(COMPLETED_TTL, |_token| {
+                let store = &store;
+                async move {
+                    runtime.shutdown_background();
+                    while store.is_healthy() {
+                        tokio::task::yield_now().await;
+                    }
+                    Ok(created(b"lost"))
+                }
             })
             .await;
 
