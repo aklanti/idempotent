@@ -17,7 +17,7 @@
 //! A retry with the same fingerprint gets the cached response with idempotent-replayed set to
 //! true. A retry while the first request still runs gets 409 with a retry-after of one second, and
 //! a key reused with a different request gets 400. Every rejection is plain text with an
-//! idempotent-rejection header carrying its code, listed on [`IdempotencyRejection`].
+//! idempotent-rejection header that holds its code, listed on [`IdempotencyRejection`].
 //!
 //! The handler runs in its own task, so a client that disconnects cannot cancel it mid side
 //! effect, and the processing lease is renewed while it runs. Everything the handler returns is

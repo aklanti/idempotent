@@ -776,7 +776,7 @@ const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 
 /// Copies the headers worth replaying into [`Metadata`].
 ///
-/// Hop-by-hop headers describe the connection that carried the response, and the date header
+/// Hop-by-hop headers describe the connection that delivered the response, and the date header
 /// is set afresh by the server, so neither is stored.
 fn storable_headers(headers: &HeaderMap) -> Metadata {
     headers

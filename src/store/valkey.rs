@@ -504,7 +504,7 @@ mod tests {
 
     #[gtest]
     #[tokio::test]
-    async fn token_carries_server_run_id() {
+    async fn token_holds_server_run_id() {
         let (store, _container) = new_store().await;
         let key = IdempotencyKey::new("sankara").expect("valid key");
         let fingerprint = DefaultFingerprintStrategy.compute(&"/list".into(), &[]);

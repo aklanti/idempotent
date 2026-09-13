@@ -12,7 +12,7 @@ At-most-once execution of side effects: for a given idempotency key the side eff
 - **Claim, run, cache in one call:** `execute_or_replay` claims the key, runs your side effect once, caches its response, and replays it to every retry within the TTL
 - **Typestate entries:** `Processing` → `Completed` is checked at compile time, so an entry cannot be completed twice or without its replay lease
 - **Fencing tokens:** a completion from an attempt that lost its claim is rejected, including an attempt that started before a Valkey restart
-- **Fingerprint matching:** a retry that carries a different request than the original is rejected; ships with an xxHash3 default, implement `FingerprintStrategy` for your own
+- **Fingerprint matching:** a retry with a different request than the original is rejected; ships with an xxHash3 default, implement `FingerprintStrategy` for your own
 - **Pluggable stores:** an in-memory store and a Valkey/Redis store; implement [`IdempotencyStore`][url-docs-store] for another backend
 - **UUID keys by default:** `IdempotencyKey::default()` generates a random UUID v4
 
@@ -191,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Using the middleware
 
-With the `middleware` feature, `IdempotencyLayer` wraps any Tower service over `http` types, and with `axum` it goes straight into `Router::layer`. A request carrying an idempotency-key header runs once and replays after. A retry while the first request runs gets 409, and a key reused with a different body gets 400. Handlers run to completion in their own tasks, so a client that disconnects cannot cancel one mid side effect.
+With the `middleware` feature, `IdempotencyLayer` wraps any Tower service over `http` types, and with `axum` it goes straight into `Router::layer`. A request with an idempotency-key header runs once and replays after. A retry while the first request runs gets 409, and a key reused with a different body gets 400. Handlers run to completion in their own tasks, so a client that disconnects cannot cancel one mid side effect.
 
 ```rust,no_run
 use axum::Router;

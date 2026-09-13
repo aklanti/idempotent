@@ -1,6 +1,6 @@
 //! Idempotency entry types.
 //!
-//! These types are storage-agnostic and carry no timestamp or persistence concerns.
+//! These types are storage-agnostic and hold no timestamp or persistence concerns.
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -33,7 +33,7 @@ impl IdempotencyEntry<Processing> {
 
     /// Completes this entry, consuming it and returning a `Completed` entry.
     ///
-    /// The completed entry carries `completed_ttl` as its replay lease.
+    /// The completed entry has `completed_ttl` as its replay lease.
     ///
     /// # Examples:
     ///
@@ -186,7 +186,7 @@ mod tests {
     use super::*;
 
     #[gtest]
-    fn complete_carries_fingerprint_and_completed_ttl() {
+    fn complete_keeps_fingerprint_and_takes_completed_ttl() {
         let fingerprint = Fingerprint(0x1ab950a);
         let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
         let response = CachedResponse {
