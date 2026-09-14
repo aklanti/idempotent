@@ -229,6 +229,7 @@ Scope every key by the caller in a service with more than one client, or one cli
 
 - **middleware:** `IdempotencyLayer`, a Tower layer for HTTP services
 - **axum:** `IdempotencyRejection` as a response and `IdempotencyKey` as an extractor
+- **json:** `run` on the claim builders, which stores a side effect's value as JSON and returns it to retries
 - **memory:** the in-memory store, for development or a single process
 - **valkey:** the Valkey/Redis store, using Lua scripts for atomic operations
 - **tracing:** instruments store operations with [`tracing`][url-tracing] spans and events

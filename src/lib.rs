@@ -53,6 +53,9 @@ pub use self::store::claim::OwnedClaimBuilder;
 #[doc(inline)]
 pub use self::store::claim::OwnedClaimOutcome;
 #[doc(inline)]
+#[cfg(feature = "json")]
+pub use self::store::claim::RunError;
+#[doc(inline)]
 #[cfg(feature = "memory")]
 pub use self::store::memory;
 #[doc(inline)]

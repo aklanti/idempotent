@@ -11,11 +11,12 @@ keywords = ["idempotency", "idempotent", "api", "retry", "deduplication"]
 categories = ["web-programming", "data-structures"]
 
 [package.metadata.docs.rs]
-features = ["axum", "memory", "middleware", "serde", "tracing", "uuid", "valkey"]
+features = ["axum", "json", "memory", "middleware", "serde", "tracing", "uuid", "valkey"]
 
 [features]
 axum = ["dep:axum", "middleware"]
 default = ["uuid"]
+json = ["serde", "dep:serde_json"]
 memory = []
 middleware = [
     "dep:http",
@@ -40,6 +41,7 @@ http-body-util = { version = "0.1", optional = true }
 pin-project-lite = { version = "0.2", optional = true }
 postcard = { version = "1", optional = true, features = ["alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 sha2 = { version = "0.10", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
