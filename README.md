@@ -22,7 +22,7 @@ Add to your `Cargo.toml`
 
 ```toml
 [dependencies]
-idempotent = { version = "1.0.0", features = ["memory"] }
+idempotent = { version = "1.1.0", features = ["memory"] }
 ```
 
 ### Quick example

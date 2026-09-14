@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/aklanti/idempotent/compare/v1.0.0...v1.1.0) - 2026-09-14
+
 ### Features
 
 - Add `run` on both claim builders under the `json` feature, which runs a side effect that produces a value, stores the value as JSON, and returns it to retries.
