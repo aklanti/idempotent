@@ -9,15 +9,14 @@ use crate::entry::IdempotencyEntry;
 use crate::entry::Processing;
 use crate::fencing_token::FencingToken;
 use crate::key::IdempotencyKey;
-pub mod claim;
 #[cfg(feature = "memory")]
 pub mod memory;
 #[cfg(feature = "valkey")]
 pub mod valkey;
 
-use self::claim::ClaimBuilder;
-use self::claim::NoFingerprint;
-use self::claim::OwnedClaimBuilder;
+use crate::claim::ClaimBuilder;
+use crate::claim::NoFingerprint;
+use crate::claim::OwnedClaimBuilder;
 
 /// Trait for idempotency entry storage backends.
 pub trait IdempotencyStore: Send + Sync + 'static {
@@ -95,7 +94,12 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     /// The entry's `ttl` is the completed lease. The fencing token must match the one returned
     /// by [`Self::try_insert`].
     ///
-    /// The returned [`FencedOutcome`] reports whether the write applied or was fenced out.
+    /// The returned [`FencedOutcome`] reports whether the write applied or was rejected, and
+    /// every store reports it the same way. If another attempt replaced the token, the rejection
+    /// is a fencing mismatch, whether that attempt is still running or has already finished. If
+    /// no live claim holds the key, or this claim already completed, the key has expired. If the
+    /// entry's fingerprint differs from the claimed one, the rejection is a fingerprint mismatch.
+    /// A rejected completion writes nothing.
     ///
     /// # Errors
     ///
@@ -109,6 +113,10 @@ pub trait IdempotencyStore: Send + Sync + 'static {
 
     /// Removes an idempotency entry if the fencing token still owns the claim.
     ///
+    /// A matching token removes the entry, a completed one included, so a claim can drop the
+    /// response it cached. A token another attempt replaced is a fencing mismatch, and a key
+    /// with no entry has expired.
+    ///
     /// # Errors
     ///
     /// Returns an error if the store operation fails.
@@ -119,6 +127,9 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     ) -> impl Future<Output = Result<FencedOutcome, Self::Error>> + Send;
 
     /// Extends the processing lease on a key by `ttl` while the fencing token matches the claim.
+    ///
+    /// It reports the same outcomes as [`complete`](Self::complete). If another attempt took the
+    /// key, the outcome is a fencing mismatch. If the key has already completed, it has expired.
     ///
     /// # Errors
     ///
@@ -160,8 +171,8 @@ mod tests {
     use crate::CachedResponse;
     use crate::IdempotencyKey;
     use crate::Metadata;
+    use crate::claim::ExecutionOutcome;
     use crate::store::IdempotencyStore;
-    use crate::store::claim::ExecutionOutcome;
     use crate::store::memory::MemoryStore;
 
     #[tokio::test]
@@ -190,7 +201,7 @@ mod tests {
             .expect("execute");
         assert!(matches!(first, ExecutionOutcome::Executed(_)));
 
-        let second = store
+        let second: ExecutionOutcome = store
             .claim(&key, Duration::from_secs(30))
             .fingerprint("POST /charges", b"{}")
             .execute_or_replay(Duration::from_secs(60), |_token| async move {

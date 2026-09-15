@@ -1,4 +1,4 @@
-//! The claim builder and the outcomes of claiming a key.
+//! The claim builders and the outcomes of claiming a key.
 
 use std::time::Duration;
 
@@ -7,23 +7,25 @@ use serde::Serialize;
 #[cfg(feature = "json")]
 use serde::de::DeserializeOwned;
 
-use super::InsertResult;
+use crate::Cacheable;
 use crate::CachedResponse;
 use crate::ClaimGuard;
-use crate::FencedOutcome;
 use crate::Fingerprint;
 use crate::IdempotencyKey;
 use crate::IdempotencyStore;
 #[cfg(feature = "json")]
-use crate::Metadata;
+use crate::Json;
 use crate::OwnedClaimGuard;
 use crate::entry::ExistingEntry;
 use crate::entry::IdempotencyEntry;
 use crate::entry::ReplayOutcome;
 use crate::fencing_token::FencingToken;
+use crate::fencing_token::Rejection;
 use crate::fingerprint::DefaultFingerprintStrategy;
 use crate::fingerprint::FingerprintStrategy;
 use crate::fingerprint::Operation;
+use crate::guard::CacheOutcome;
+use crate::store::InsertResult;
 
 /// The state of the builder without the fingerprint.
 pub struct NoFingerprint;
@@ -85,8 +87,8 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, NoFingerprint> {
 impl<'store, S: IdempotencyStore, State> ClaimBuilder<'store, S, State> {
     /// Renews the processing lease while the side effect runs, for at most `ceiling`.
     ///
-    /// After the ceiling the lease lapses, and a completion that comes later is
-    /// [`Fenced`](ExecutionOutcome::Fenced).
+    /// After the ceiling the lease lapses, so the next attempt can take the key. A completion
+    /// that comes later still caches its response while the key is free.
     pub const fn keep_alive(mut self, ceiling: Duration) -> Self {
         self.keep_alive = Some(ceiling);
         self
@@ -116,113 +118,109 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
 
     /// Claims the key and runs the side effect, or replays the cached response on a matching retry.
     ///
-    /// On the first request for the key it is claimed, and the side effect runs with the claim's
-    /// fencing token which caches the response. A later request with the same fingerprint
-    /// replays that response, or returns while the original is still in progress. With
-    /// [`keep_alive`](Self::keep_alive) set, the processing lease is renewed while the side
-    /// effect runs.
+    /// The side effect runs with the claim's fencing token, and its response is cached under
+    /// the key. A retry with the same fingerprint replays that response.
     ///
-    /// If the store rejects the completion, the outcome is [`Fenced`](ExecutionOutcome::Fenced).
-    /// The side effect has run but its response was not cached.
+    /// With [`keep_alive`](Self::keep_alive) set, the processing lease is renewed while the side
+    /// effect runs. If the claim lapsed anyway, the key is claimed again. If another attempt
+    /// took it, the outcome is [`Fenced`](ExecutionOutcome::Fenced).
     ///
     /// Dropping the returned future before it completes leaves the claim in place until the
     /// processing TTL expires. For a future that frees the claim when dropped, use
-    /// [`claim_owned`](IdempotencyStore::claim_owned); a failed side effect leaves the claim
-    /// to expire on both paths.
+    /// [`claim_owned`](IdempotencyStore::claim_owned). A failed side effect leaves the claim to
+    /// expire on both paths.
     ///
     /// # Errors
     ///
-    /// Returns an error if the side effect fails, or if a store operation fails.
-    /// When the side effect fails, the claim is left to expire so a later retry re-runs it.
-    /// When the completion fails, [`Completion`](ExecutionError::Completion) contains the
-    /// response and the claim is left to expire.
-    pub async fn execute_or_replay<F, Fut>(
+    /// Returns an error if the side effect fails, or if a store operation fails. When the store
+    /// fails after the side effect ran, the error holds the response it produced.
+    pub async fn execute_or_replay<Response, F, Fut>(
         self,
         completed_ttl: Duration,
         side_effect: F,
-    ) -> Result<ExecutionOutcome, ExecutionError<S::Error>>
+    ) -> Result<ExecutionOutcome<Response>, ExecutionError<S::Error>>
     where
+        Response: Cacheable,
         F: FnOnce(FencingToken) -> Fut,
-        Fut: Future<Output = Result<CachedResponse, Box<dyn std::error::Error + Send + Sync>>>,
+        Fut: Future<Output = Result<Response, Box<dyn std::error::Error + Send + Sync>>>,
     {
         let keep_alive = self.keep_alive;
         let processing_ttl = self.processing_ttl;
-        #[cfg(feature = "tracing")]
-        let key = self.key;
         match self.try_insert().await.map_err(ExecutionError::Store)? {
             ClaimOutcome::Claimed(guard) => {
-                let response = run_with_renewal(
+                let value = run_with_renewal(
                     side_effect(guard.fencing_token()),
                     keep_alive.map(|ceiling| guard.keep_alive(processing_ttl, ceiling)),
                 )
                 .await
                 .map_err(ExecutionError::SideEffect)?;
-                let verdict = match guard.complete(response.clone(), completed_ttl).await {
-                    Ok(verdict) => verdict,
-                    Err(source) => return Err(ExecutionError::Completion { source, response }),
-                };
-                let outcome = ExecutionOutcome::from_completion(verdict, response);
-                #[cfg(feature = "tracing")]
-                if let ExecutionOutcome::Fenced { rejection, .. } = &outcome {
-                    tracing::warn!(
-                        key = %key,
-                        ?rejection,
-                        "completion rejected after the side effect ran"
-                    );
-                }
-                Ok(outcome)
+                let encoded = value
+                    .to_response()
+                    .map_err(|error| ExecutionError::Payload(error.into()))?;
+                let cached = guard.cache(encoded.clone(), completed_ttl).await;
+                cached_outcome(cached, value, encoded)
             }
             ClaimOutcome::Exists {
                 existing,
                 fingerprint,
-            } => Ok(existing.replay(fingerprint).into()),
+            } => replayed(existing.replay(fingerprint)),
         }
     }
 }
 
 #[cfg(feature = "json")]
 impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
-    /// Runs the side effect once and returns its value, or the cached value on a retry.
+    /// Takes a side effect that returns a value, cached as JSON in the response body.
     ///
-    /// The value is stored as JSON in the cached response, so a retry gets it back without the
-    /// side effect running again. When the store rejects the completion after the side effect ran,
-    /// the value is still returned and the rejection is logged.
+    /// The same as returning [`Json`] from the side effect, without the wrapper at either end.
+    pub const fn json(self) -> JsonClaimBuilder<'store, S> {
+        JsonClaimBuilder { claim: self }
+    }
+}
+
+/// A builder for a claim whose side effect produces a value rather than a response.
+#[cfg(feature = "json")]
+pub struct JsonClaimBuilder<'store, S: IdempotencyStore> {
+    claim: ClaimBuilder<'store, S, WithFingerprint>,
+}
+
+#[cfg(feature = "json")]
+impl<'store, S: IdempotencyStore> JsonClaimBuilder<'store, S> {
+    /// Renews the processing lease while the side effect runs, for at most `ceiling`.
+    ///
+    /// After the ceiling the lease lapses, so the next attempt can take the key.
+    pub const fn keep_alive(self, ceiling: Duration) -> Self {
+        Self {
+            claim: self.claim.keep_alive(ceiling),
+        }
+    }
+
+    /// Claims the key and runs the side effect, or replays the cached value on a matching retry.
+    ///
+    /// Behaves as [`ClaimBuilder::execute_or_replay`], except that the side effect returns a
+    /// value rather than a response, and the value is cached as JSON.
     ///
     /// # Errors
     ///
-    /// Returns the side effect's own error when it fails, with the claim left to expire, and
-    /// otherwise a [`RunError`].
-    pub async fn run<T, E, F, Fut>(self, completed_ttl: Duration, side_effect: F) -> Result<T, E>
+    /// Returns an error if the side effect fails, or if a store operation fails. When the store
+    /// fails after the side effect ran, the error holds the response it produced.
+    pub async fn execute_or_replay<T, F, Fut>(
+        self,
+        completed_ttl: Duration,
+        side_effect: F,
+    ) -> Result<ExecutionOutcome<T>, ExecutionError<S::Error>>
     where
         T: Serialize + DeserializeOwned,
-        E: From<RunError>,
         F: FnOnce(FencingToken) -> Fut,
-        Fut: Future<Output = Result<T, E>>,
+        Fut: Future<Output = Result<T, Box<dyn std::error::Error + Send + Sync>>>,
     {
-        let keep_alive = self.keep_alive;
-        let processing_ttl = self.processing_ttl;
-        let key = self.key;
-        let claimed = self
-            .try_insert()
-            .await
-            .map_err(|error| RunError::Store(Box::new(error)))?;
-        let guard = match claimed {
-            ClaimOutcome::Claimed(guard) => guard,
-            ClaimOutcome::Exists {
-                existing,
-                fingerprint,
-            } => return decode_value(existing.replay(fingerprint)),
-        };
-
-        let value = run_with_renewal(
-            side_effect(guard.fencing_token()),
-            keep_alive.map(|ceiling| guard.keep_alive(processing_ttl, ceiling)),
-        )
-        .await?;
-        let body = serde_json::to_vec(&value).map_err(RunError::Codec)?;
-        let response = CachedResponse::new(200, Metadata::new(), body.into());
-        note_completion(key, guard.complete(response, completed_ttl).await);
-        Ok(value)
+        let outcome = self
+            .claim
+            .execute_or_replay(completed_ttl, |token| async move {
+                side_effect(token).await.map(Json)
+            })
+            .await?;
+        Ok(outcome.map(|Json(value)| value))
     }
 }
 
@@ -302,8 +300,8 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, NoFingerprint> {
 impl<S: IdempotencyStore + Clone, State> OwnedClaimBuilder<S, State> {
     /// Renews the processing lease while the side effect runs, for at most `ceiling`.
     ///
-    /// After the ceiling the lease lapses, and a completion that comes later is
-    /// [`Fenced`](ExecutionOutcome::Fenced).
+    /// After the ceiling the lease lapses, so the next attempt can take the key. A completion
+    /// that comes later still caches its response while the key is free.
     pub const fn keep_alive(mut self, ceiling: Duration) -> Self {
         self.keep_alive = Some(ceiling);
         self
@@ -339,9 +337,9 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, WithFingerprint> {
     /// Claims the key and runs the side effect, or replays the cached response on a matching
     /// retry.
     ///
-    /// Behaves as [`ClaimBuilder::execute_or_replay`] with the difference that the returned future
-    /// owns its store and key, so it can move across tasks and runtimes, and dropping it while
-    /// the side effect runs frees the claim at once.
+    /// Behaves as [`ClaimBuilder::execute_or_replay`], except that the returned future owns its
+    /// store and key. It can move across tasks and runtimes, and dropping it while the side
+    /// effect runs frees the claim at once.
     ///
     /// When the side effect fails, the claim is left to expire, as on the borrowing path.
     /// With [`keep_alive`](Self::keep_alive) set, the processing lease is renewed while the side
@@ -349,177 +347,115 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, WithFingerprint> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the side effect fails, or if a store operation fails. When the
-    /// completion fails, [`Completion`](ExecutionError::Completion) contains the response and
-    /// the claim is left to expire.
+    /// Returns an error if the side effect fails, or if a store operation fails. When the store
+    /// fails after the side effect ran, the error holds the response it produced.
     ///
     /// # Panics
     ///
     /// Panics if polled outside a Tokio runtime.
-    pub async fn execute_or_replay<F, Fut>(
+    pub async fn execute_or_replay<Response, F, Fut>(
         self,
         completed_ttl: Duration,
         side_effect: F,
-    ) -> Result<ExecutionOutcome, ExecutionError<S::Error>>
+    ) -> Result<ExecutionOutcome<Response>, ExecutionError<S::Error>>
     where
+        Response: Cacheable,
         F: FnOnce(FencingToken) -> Fut,
-        Fut: Future<Output = Result<CachedResponse, Box<dyn std::error::Error + Send + Sync>>>,
+        Fut: Future<Output = Result<Response, Box<dyn std::error::Error + Send + Sync>>>,
     {
         let keep_alive = self.keep_alive;
         let processing_ttl = self.processing_ttl;
-        #[cfg(feature = "tracing")]
-        let key = self.key.clone();
         match self.try_insert().await.map_err(ExecutionError::Store)? {
             OwnedClaimOutcome::Claimed(guard) => {
-                let response = match run_with_renewal(
+                let value = match run_with_renewal(
                     side_effect(guard.fencing_token()),
                     keep_alive.map(|ceiling| guard.keep_alive(processing_ttl, ceiling)),
                 )
                 .await
                 {
-                    Ok(response) => response,
+                    Ok(value) => value,
                     Err(error) => {
                         guard.leave();
                         return Err(ExecutionError::SideEffect(error));
                     }
                 };
-                let verdict = match guard.complete(response.clone(), completed_ttl).await {
-                    Ok(verdict) => verdict,
-                    Err(source) => return Err(ExecutionError::Completion { source, response }),
+                let encoded = match value.to_response() {
+                    Ok(encoded) => encoded,
+                    Err(error) => {
+                        guard.leave();
+                        return Err(ExecutionError::Payload(error.into()));
+                    }
                 };
-                let outcome = ExecutionOutcome::from_completion(verdict, response);
-                #[cfg(feature = "tracing")]
-                if let ExecutionOutcome::Fenced { rejection, .. } = &outcome {
-                    tracing::warn!(
-                        key = %key,
-                        ?rejection,
-                        "completion rejected after the side effect ran"
-                    );
-                }
-                Ok(outcome)
+                let cached = guard.cache(encoded.clone(), completed_ttl).await;
+                cached_outcome(cached, value, encoded)
             }
             OwnedClaimOutcome::Exists {
                 existing,
                 fingerprint,
-            } => Ok(existing.replay(fingerprint).into()),
+            } => replayed(existing.replay(fingerprint)),
         }
     }
 }
 
 #[cfg(feature = "json")]
 impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, WithFingerprint> {
-    /// Runs the side effect once and returns its value, or the cached value on a retry.
+    /// Takes a side effect that returns a value, cached as JSON in the response body.
     ///
-    /// Behaves as [`ClaimBuiler::run`] with the difference that the returned future owns its
-    /// store and key, so it can move across tasks and runtimes, and dropping it while the
-    /// side effect runs frees the claim at once.
+    /// The same as returning [`Json`] from the side effect, without the wrapper at either end.
+    pub const fn json(self) -> OwnedJsonClaimBuilder<S> {
+        OwnedJsonClaimBuilder { claim: self }
+    }
+}
+
+/// A builder for an owned claim whose side effect produces a value rather than a response.
+#[cfg(feature = "json")]
+pub struct OwnedJsonClaimBuilder<S: IdempotencyStore + Clone> {
+    claim: OwnedClaimBuilder<S, WithFingerprint>,
+}
+
+#[cfg(feature = "json")]
+impl<S: IdempotencyStore + Clone> OwnedJsonClaimBuilder<S> {
+    /// Renews the processing lease while the side effect runs, for at most `ceiling`.
+    ///
+    /// After the ceiling the lease lapses, so the next attempt can take the key.
+    pub fn keep_alive(self, ceiling: Duration) -> Self {
+        Self {
+            claim: self.claim.keep_alive(ceiling),
+        }
+    }
+
+    /// Claims the key and runs the side effect, or replays the cached value on a matching retry.
+    ///
+    /// Behaves as [`JsonClaimBuilder::execute_or_replay`], except that the returned future owns
+    /// its store and key. It can move across tasks and runtimes, and dropping it while the side
+    /// effect runs frees the claim at once.
     ///
     /// # Errors
     ///
-    /// Returns the side effect's own error when it fails, with the claim left to expire, and
-    /// otherwise a [`RunError`].
+    /// Returns an error if the side effect fails, or if a store operation fails. When the store
+    /// fails after the side effect ran, the error holds the response it produced.
     ///
     /// # Panics
     ///
     /// Panics if polled outside a Tokio runtime.
-    pub async fn run<T, E, F, Fut>(self, completed_ttl: Duration, side_effect: F) -> Result<T, E>
+    pub async fn execute_or_replay<T, F, Fut>(
+        self,
+        completed_ttl: Duration,
+        side_effect: F,
+    ) -> Result<ExecutionOutcome<T>, ExecutionError<S::Error>>
     where
         T: Serialize + DeserializeOwned,
-        E: From<RunError>,
         F: FnOnce(FencingToken) -> Fut,
-        Fut: Future<Output = Result<T, E>>,
+        Fut: Future<Output = Result<T, Box<dyn std::error::Error + Send + Sync>>>,
     {
-        let keep_alive = self.keep_alive;
-        let processing_ttl = self.processing_ttl;
-        let key = self.key.clone();
-        let claimed = self
-            .try_insert()
-            .await
-            .map_err(|error| RunError::Store(Box::new(error)))?;
-        let guard = match claimed {
-            OwnedClaimOutcome::Claimed(guard) => guard,
-            OwnedClaimOutcome::Exists {
-                existing,
-                fingerprint,
-            } => return decode_value(existing.replay(fingerprint)),
-        };
-
-        let value = match run_with_renewal(
-            side_effect(guard.fencing_token()),
-            keep_alive.map(|ceiling| guard.keep_alive(processing_ttl, ceiling)),
-        )
-        .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                guard.leave();
-                return Err(error);
-            }
-        };
-        let body = match serde_json::to_vec(&value) {
-            Ok(body) => body,
-            Err(error) => {
-                guard.leave();
-                return Err(RunError::Codec(error).into());
-            }
-        };
-        let response = CachedResponse::new(200, Metadata::new(), body.into());
-        note_completion(&key, guard.complete(response, completed_ttl).await);
-        Ok(value)
+        let outcome = self
+            .claim
+            .execute_or_replay(completed_ttl, |token| async move {
+                side_effect(token).await.map(Json)
+            })
+            .await?;
+        Ok(outcome.map(|Json(value)| value))
     }
-}
-
-/// The error when running a side effect.
-#[cfg(feature = "json")]
-#[non_exhaustive]
-#[derive(Debug, thiserror::Error)]
-pub enum RunError {
-    /// Another request with the same key is still running.
-    #[error("a request with this idempotency key is in flight")]
-    InFlight,
-    /// The key was reused with a different request.
-    #[error("the idempotency key was reused with a different request")]
-    FingerprintMismatch,
-    /// The store failed.
-    #[error("store operation failed")]
-    Store(#[source] Box<dyn std::error::Error + Send + Sync>),
-    /// The value could not be encoded for the cache, or a cached value could not be decoded.
-    #[error("the value could not be encoded or decoded")]
-    Codec(#[source] serde_json::Error),
-}
-
-/// Decode the response.
-#[cfg(feature = "json")]
-fn decode_value<T: DeserializeOwned, E: From<RunError>>(outcome: ReplayOutcome) -> Result<T, E> {
-    match outcome {
-        ReplayOutcome::Replayed(response) => {
-            serde_json::from_slice(&response.body).map_err(|error| RunError::Codec(error).into())
-        }
-        ReplayOutcome::InFlight => Err(RunError::InFlight.into()),
-        ReplayOutcome::FingerprintMismatch => Err(RunError::FingerprintMismatch.into()),
-    }
-}
-
-/// Logs a completion the store rejected or failed after the side effect ran.
-#[cfg(feature = "json")]
-fn note_completion<E: std::fmt::Display>(key: &IdempotencyKey, result: Result<FencedOutcome, E>) {
-    match result {
-        Ok(FencedOutcome::Applied) => {}
-        Ok(_rejection) => {
-            #[cfg(feature = "tracing")]
-            tracing::warn!(
-                key = %key,
-                rejection = ?_rejection,
-                "completion rejected after the side effect ran"
-            );
-        }
-        Err(_error) => {
-            #[cfg(feature = "tracing")]
-            tracing::warn!(key = %key, error = %_error, "completion failed after the side effect ran");
-        }
-    }
-    #[cfg(not(feature = "tracing"))]
-    let _ = key;
 }
 
 /// The outcome of a borrowed claim.
@@ -534,6 +470,7 @@ pub enum ClaimOutcome<'store, S: IdempotencyStore> {
         fingerprint: Fingerprint,
     },
 }
+
 /// Owned [`ClaimOutcome`] returned by [`OwnedClaimBuilder::try_insert`].
 pub enum OwnedClaimOutcome<S: IdempotencyStore + Clone> {
     /// The key was claimed.
@@ -548,46 +485,53 @@ pub enum OwnedClaimOutcome<S: IdempotencyStore + Clone> {
 }
 
 /// Result of [`ClaimBuilder::execute_or_replay`] and [`OwnedClaimBuilder::execute_or_replay`].
+///
+/// `Response` is what the side effect produced, a [`CachedResponse`] unless the side effect
+/// returned another [`Cacheable`] payload.
 #[derive(Debug)]
-pub enum ExecutionOutcome {
+pub enum ExecutionOutcome<Response = CachedResponse> {
     /// First time execution of the side effect and its response was cached.
-    Executed(CachedResponse),
+    Executed(Response),
     /// The side effect ran, but the store rejected the completion and did not cache the response.
     Fenced {
         /// The reason the store rejected the completion.
-        rejection: FencedOutcome,
+        rejection: Rejection,
         /// The response the side effect produced.
-        response: CachedResponse,
+        response: Response,
     },
     /// The cached response was replayed.
-    Replayed(CachedResponse),
+    Replayed(Response),
     /// Another request holds the key mid-flight.
     InFlight,
     /// A different request reused the key.
     FingerprintMismatch,
 }
 
-impl ExecutionOutcome {
-    /// Reads the store's verdict on a completion, keeping the response the side effect produced.
-    const fn from_completion(verdict: FencedOutcome, response: CachedResponse) -> Self {
-        match verdict {
-            FencedOutcome::Applied => Self::Executed(response),
-            rejection @ (FencedOutcome::FencingMismatch
-            | FencedOutcome::KeyExpired
-            | FencedOutcome::FingerprintMismatch) => Self::Fenced {
+impl<Response> ExecutionOutcome<Response> {
+    /// Applies `f` to the response the outcome holds.
+    pub fn map<T>(self, f: impl FnOnce(Response) -> T) -> ExecutionOutcome<T> {
+        match self {
+            Self::Executed(response) => ExecutionOutcome::Executed(f(response)),
+            Self::Replayed(response) => ExecutionOutcome::Replayed(f(response)),
+            Self::Fenced {
                 rejection,
                 response,
+            } => ExecutionOutcome::Fenced {
+                rejection,
+                response: f(response),
             },
+            Self::InFlight => ExecutionOutcome::InFlight,
+            Self::FingerprintMismatch => ExecutionOutcome::FingerprintMismatch,
         }
     }
 }
 
 /// Error when executing or replaying the operation.
 #[derive(Debug, thiserror::Error)]
-pub enum ExecutionError<E> {
+pub enum ExecutionError<StoreError> {
     /// The store failed before the side effect ran.
     #[error("store operation failed")]
-    Store(#[source] E),
+    Store(#[source] StoreError),
     /// The side effect returned an error.
     #[error("side effect failed")]
     SideEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
@@ -596,10 +540,70 @@ pub enum ExecutionError<E> {
     Completion {
         /// The store error.
         #[source]
-        source: E,
-        /// The response the side effect produced.
+        source: StoreError,
+        /// The response the side effect produced, as it was cached.
         response: CachedResponse,
     },
+    /// The payload could not be encoded for the cache, or a cached one could not be decoded.
+    #[error("the payload could not be encoded or decoded")]
+    Payload(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl<StoreError> ExecutionError<StoreError> {
+    /// Returns the side effect's own error when it has type `T`, or this error unchanged.
+    ///
+    /// The side effect's error is boxed on the way out, and this takes it back out of the box.
+    ///
+    /// # Errors
+    ///
+    /// Returns this error when it came from elsewhere, or when the side effect's error has
+    /// another type.
+    pub fn into_side_effect_error<T>(self) -> Result<T, Self>
+    where
+        T: std::error::Error + Send + Sync + 'static,
+    {
+        let Self::SideEffect(error) = self else {
+            return Err(self);
+        };
+        match error.downcast::<T>() {
+            Ok(error) => Ok(*error),
+            Err(error) => Err(Self::SideEffect(error)),
+        }
+    }
+}
+
+/// Maps what caching produced to the outcome the caller sees.
+fn cached_outcome<Response, StoreError>(
+    cached: Result<CacheOutcome, StoreError>,
+    value: Response,
+    encoded: CachedResponse,
+) -> Result<ExecutionOutcome<Response>, ExecutionError<StoreError>> {
+    match cached {
+        Ok(CacheOutcome::Cached) => Ok(ExecutionOutcome::Executed(value)),
+        Ok(CacheOutcome::Uncached { rejection, .. }) => Ok(ExecutionOutcome::Fenced {
+            rejection,
+            response: value,
+        }),
+        Err(source) => Err(ExecutionError::Completion {
+            source,
+            response: encoded,
+        }),
+    }
+}
+
+/// Decodes what the key already holds into the outcome the caller sees.
+fn replayed<Response: Cacheable, StoreError>(
+    replay: ReplayOutcome,
+) -> Result<ExecutionOutcome<Response>, ExecutionError<StoreError>> {
+    let outcome = match replay {
+        ReplayOutcome::Replayed(cached) => ExecutionOutcome::Replayed(
+            Response::from_response(cached)
+                .map_err(|error| ExecutionError::Payload(error.into()))?,
+        ),
+        ReplayOutcome::InFlight => ExecutionOutcome::InFlight,
+        ReplayOutcome::FingerprintMismatch => ExecutionOutcome::FingerprintMismatch,
+    };
+    Ok(outcome)
 }
 
 /// Runs the side effect, racing it against the lease renewal when one is set.
@@ -640,6 +644,7 @@ mod tests {
     use crate::IdempotencyKey;
     use crate::IdempotencyStore;
     use crate::Metadata;
+    use crate::fencing_token::Rejection;
     use crate::store::memory::MemoryStore;
 
     const OPERATION: &str = "POST /charges";
@@ -680,10 +685,10 @@ mod tests {
         else {
             panic!("expected the completion after lease expiry to be fenced");
         };
-        assert_eq!(rejection, FencedOutcome::KeyExpired);
+        assert_eq!(rejection, Rejection::KeyExpired);
         assert_eq!(response, created(b"first"));
 
-        let second = store
+        let second: ExecutionOutcome = store
             .claim(&key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
             .execute_or_replay(
@@ -733,7 +738,7 @@ mod tests {
         else {
             panic!("expected the completion after a reclaim to be fenced");
         };
-        assert_eq!(rejection, FencedOutcome::FencingMismatch);
+        assert_eq!(rejection, Rejection::FencingMismatch);
         assert_eq!(response, created(b"first"));
 
         let guard = reclaimed
@@ -745,7 +750,7 @@ mod tests {
             .expect("complete");
         assert_eq!(applied, FencedOutcome::Applied);
 
-        let third = store
+        let third: ExecutionOutcome = store
             .claim(&key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
             .execute_or_replay(COMPLETED_TTL, |_token| async move {
@@ -774,7 +779,7 @@ mod tests {
             panic!("expected a fresh claim");
         };
 
-        let outcome = store
+        let outcome: ExecutionOutcome = store
             .claim(&key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
             .execute_or_replay(COMPLETED_TTL, |_token| async move {
@@ -798,7 +803,7 @@ mod tests {
             .expect("execute");
         assert!(matches!(first, ExecutionOutcome::Executed(_)));
 
-        let second = store
+        let second: ExecutionOutcome = store
             .claim(&key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{\"amount\": 2}")
             .execute_or_replay(COMPLETED_TTL, |_token| async move {
@@ -822,7 +827,7 @@ mod tests {
             .expect("execute");
         assert!(matches!(first, ExecutionOutcome::Executed(_)));
 
-        let second = store
+        let second: ExecutionOutcome = store
             .claim_owned(key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
             .execute_or_replay(COMPLETED_TTL, |_token| async move {
@@ -844,7 +849,9 @@ mod tests {
         let failed = store
             .claim_owned(key.clone(), PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
-            .execute_or_replay(COMPLETED_TTL, |_token| async move { Err("boom".into()) })
+            .execute_or_replay(COMPLETED_TTL, |_token| async move {
+                Err::<CachedResponse, _>("boom".into())
+            })
             .await;
         assert!(matches!(failed, Err(ExecutionError::SideEffect(_))));
 
@@ -929,7 +936,7 @@ mod tests {
             .expect("execute");
         assert!(matches!(first, ExecutionOutcome::Executed(_)));
 
-        let second = store
+        let second: ExecutionOutcome = store
             .claim(&key, Duration::from_secs(1))
             .fingerprint(OPERATION, b"{}")
             .execute_or_replay(COMPLETED_TTL, |_token| async move {
@@ -945,16 +952,39 @@ mod tests {
         let store = memory_store();
         let key = IdempotencyKey::new("too-slow").expect("valid key");
 
-        let outcome = store
+        let mut reclaimed: Option<ClaimGuard<'_, MemoryStore>> = None;
+
+        let outcome: ExecutionOutcome = store
             .claim(&key, Duration::from_secs(1))
             .keep_alive(Duration::from_secs(2))
             .fingerprint(OPERATION, b"{}")
-            .execute_or_replay(COMPLETED_TTL, |_token| async move {
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                Ok(created(b"late"))
+            .execute_or_replay(COMPLETED_TTL, |_token| {
+                let store = &store;
+                let key = &key;
+                let slot = &mut reclaimed;
+                let claim = || {
+                    store
+                        .claim(key, PROCESSING_TTL)
+                        .fingerprint(OPERATION, b"{}")
+                        .try_insert()
+                };
+                async move {
+                    // The renewal holds the key past its one second lease, until the ceiling.
+                    tokio::time::sleep(Duration::from_millis(1_200)).await;
+                    assert!(matches!(claim().await?, ClaimOutcome::Exists { .. }));
+
+                    // Past the ceiling the lease lapses, so the next attempt takes the key.
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    let ClaimOutcome::Claimed(guard) = claim().await? else {
+                        return Err("expected the lapsed key to be free".into());
+                    };
+                    *slot = Some(guard);
+                    Ok(created(b"late"))
+                }
             })
             .await
             .expect("execute");
+
         let ExecutionOutcome::Fenced {
             rejection,
             response,
@@ -962,21 +992,13 @@ mod tests {
         else {
             panic!("expected the completion after the ceiling to be fenced");
         };
-        assert_eq!(rejection, FencedOutcome::KeyExpired);
+        assert_eq!(rejection, Rejection::FencingMismatch);
         assert_eq!(response, created(b"late"));
-
-        let free = store
-            .claim(&key, Duration::from_secs(1))
-            .fingerprint(OPERATION, b"{}")
-            .try_insert()
-            .await
-            .expect("claim");
-        assert!(matches!(free, ClaimOutcome::Claimed(_)));
     }
 }
 
 #[cfg(all(test, feature = "memory", feature = "json"))]
-mod run_tests {
+mod json_tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
@@ -985,9 +1007,10 @@ mod run_tests {
     use serde::Serialize;
 
     use super::ClaimOutcome;
-    use super::RunError;
+    use super::ExecutionOutcome;
     use crate::IdempotencyKey;
     use crate::IdempotencyStore;
+    use crate::fencing_token::Rejection;
     use crate::store::memory::MemoryStore;
 
     const OPERATION: &str = "POST /credentials/issue";
@@ -1000,12 +1023,8 @@ mod run_tests {
     }
 
     #[derive(Debug, thiserror::Error)]
-    enum IssueError {
-        #[error("signer down")]
-        Signer,
-        #[error(transparent)]
-        Idempotency(#[from] RunError),
-    }
+    #[error("signer down")]
+    struct SignerDown;
 
     fn store() -> MemoryStore {
         MemoryStore::builder().try_build().expect("memory store")
@@ -1018,35 +1037,45 @@ mod run_tests {
     }
 
     #[tokio::test]
-    async fn run_returns_the_value_then_replays_it() {
+    async fn json_returns_the_value_then_replays_it() {
         let store = store();
         let key = IdempotencyKey::new("offer-8f21").expect("valid key");
         let runs = AtomicUsize::new(0);
 
-        let first: Result<Issued, IssueError> = store
+        let first = store
             .claim(&key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
-            .run(COMPLETED_TTL, |_token| async {
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| async {
                 runs.fetch_add(1, Ordering::SeqCst);
                 Ok(issued())
             })
-            .await;
-        let second: Result<Issued, IssueError> = store
+            .await
+            .expect("first run");
+        let second: ExecutionOutcome<Issued> = store
             .claim_owned(key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
-            .run(COMPLETED_TTL, |_token| async {
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| async {
                 runs.fetch_add(1, Ordering::SeqCst);
-                Err(IssueError::Signer)
+                Err(SignerDown.into())
             })
-            .await;
+            .await
+            .expect("replay");
 
-        assert_eq!(first.expect("first run"), issued());
-        assert_eq!(second.expect("replay"), issued());
+        let ExecutionOutcome::Executed(value) = first else {
+            panic!("expected the first run to execute");
+        };
+        assert_eq!(value, issued());
+        let ExecutionOutcome::Replayed(value) = second else {
+            panic!("expected the retry to replay");
+        };
+        assert_eq!(value, issued());
         assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn run_reports_in_flight_and_reuse_through_the_caller_error() {
+    async fn json_reports_in_flight_and_reuse() {
         let store = store();
         let key = IdempotencyKey::new("offer-8f21").expect("valid key");
         let held = store
@@ -1059,36 +1088,35 @@ mod run_tests {
             panic!("expected a fresh claim");
         };
 
-        let in_flight: Result<Issued, IssueError> = store
+        let in_flight = store
             .claim(&key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
-            .run(COMPLETED_TTL, |_token| async { Ok(issued()) })
-            .await;
-        let reused: Result<Issued, IssueError> = store
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| async { Ok(issued()) })
+            .await
+            .expect("execute");
+        let reused = store
             .claim(&key, PROCESSING_TTL)
             .fingerprint(OPERATION, b"{\"other\": true}")
-            .run(COMPLETED_TTL, |_token| async { Ok(issued()) })
-            .await;
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| async { Ok(issued()) })
+            .await
+            .expect("execute");
 
-        assert!(matches!(
-            in_flight,
-            Err(IssueError::Idempotency(RunError::InFlight))
-        ));
-        assert!(matches!(
-            reused,
-            Err(IssueError::Idempotency(RunError::FingerprintMismatch))
-        ));
+        assert!(matches!(in_flight, ExecutionOutcome::InFlight));
+        assert!(matches!(reused, ExecutionOutcome::FingerprintMismatch));
     }
 
     #[tokio::test]
-    async fn owned_run_leaves_the_claim_when_the_side_effect_fails() {
+    async fn owned_json_leaves_the_claim_when_the_side_effect_fails() {
         let store = store();
         let key = IdempotencyKey::new("offer-8f21").expect("valid key");
 
-        let failed: Result<Issued, IssueError> = store
+        let failed: Result<ExecutionOutcome<Issued>, _> = store
             .claim_owned(key.clone(), PROCESSING_TTL)
             .fingerprint(OPERATION, b"{}")
-            .run(COMPLETED_TTL, |_token| async { Err(IssueError::Signer) })
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| async { Err(SignerDown.into()) })
             .await;
         let held = store
             .claim(&key, PROCESSING_TTL)
@@ -1097,7 +1125,158 @@ mod run_tests {
             .await
             .expect("claim");
 
-        assert!(matches!(failed, Err(IssueError::Signer)));
+        // The side effect's own error comes back out of the box.
+        let error = failed.expect_err("the side effect failed");
+        assert!(error.into_side_effect_error::<SignerDown>().is_ok());
         assert!(matches!(held, ClaimOutcome::Exists { .. }));
+    }
+
+    #[tokio::test]
+    async fn json_reports_fenced_when_another_attempt_completed_the_key() {
+        let store = store();
+        let key = IdempotencyKey::new("offer-8f21").expect("valid key");
+        let late = Issued {
+            credential: "late".to_owned(),
+        };
+
+        let lapsed = store
+            .claim(&key, Duration::ZERO)
+            .fingerprint(OPERATION, b"{}")
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| {
+                let store = &store;
+                let key = &key;
+                let late = late.clone();
+                async move {
+                    let winner = store
+                        .claim(key, PROCESSING_TTL)
+                        .fingerprint(OPERATION, b"{}")
+                        .json()
+                        .execute_or_replay(COMPLETED_TTL, |_token| async { Ok(issued()) })
+                        .await?;
+                    assert!(matches!(winner, ExecutionOutcome::Executed(_)));
+                    Ok(late)
+                }
+            })
+            .await
+            .expect("execute");
+        let replay: ExecutionOutcome<Issued> = store
+            .claim(&key, PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{}")
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| async { Err(SignerDown.into()) })
+            .await
+            .expect("replay");
+
+        let ExecutionOutcome::Fenced {
+            rejection,
+            response,
+        } = lapsed
+        else {
+            panic!("expected the completion of a key another attempt completed to be fenced");
+        };
+        assert_eq!(rejection, Rejection::FencingMismatch);
+        assert_eq!(response, late);
+        let ExecutionOutcome::Replayed(value) = replay else {
+            panic!("expected the winner's value to replay");
+        };
+        assert_eq!(value, issued());
+    }
+
+    #[tokio::test]
+    async fn json_reports_fenced_when_another_attempt_holds_the_key() {
+        let store = store();
+        let key = IdempotencyKey::new("offer-8f21").expect("valid key");
+
+        let lapsed = store
+            .claim(&key, Duration::ZERO)
+            .fingerprint(OPERATION, b"{}")
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| async {
+                let held = store
+                    .claim(&key, PROCESSING_TTL)
+                    .fingerprint(OPERATION, b"{}")
+                    .try_insert()
+                    .await
+                    .expect("claim");
+                assert!(matches!(held, ClaimOutcome::Claimed(_)));
+                Ok(issued())
+            })
+            .await
+            .expect("execute");
+
+        let ExecutionOutcome::Fenced { rejection, .. } = lapsed else {
+            panic!("expected the completion of a key another attempt holds to be fenced");
+        };
+        assert_eq!(rejection, Rejection::FencingMismatch);
+    }
+
+    #[tokio::test]
+    async fn owned_json_reports_fenced_when_another_attempt_holds_the_key() {
+        let store = store();
+        let key = IdempotencyKey::new("offer-8f21").expect("valid key");
+
+        let lapsed = store
+            .claim_owned(key.clone(), Duration::ZERO)
+            .fingerprint(OPERATION, b"{}")
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| {
+                let store = store.clone();
+                let key = key.clone();
+                async move {
+                    let held = store
+                        .claim(&key, PROCESSING_TTL)
+                        .fingerprint(OPERATION, b"{}")
+                        .try_insert()
+                        .await
+                        .expect("claim");
+                    assert!(matches!(held, ClaimOutcome::Claimed(_)));
+                    Ok(issued())
+                }
+            })
+            .await
+            .expect("execute");
+
+        let ExecutionOutcome::Fenced { rejection, .. } = lapsed else {
+            panic!("expected the completion of a key another attempt holds to be fenced");
+        };
+        assert_eq!(rejection, Rejection::FencingMismatch);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn json_caches_the_value_after_its_claim_lapsed() {
+        let store = store();
+        let key = IdempotencyKey::new("offer-8f21").expect("valid key");
+        let runs = AtomicUsize::new(0);
+
+        // The lease lapses while the side effect runs, and no other attempt takes the key.
+        let lapsed = store
+            .claim(&key, Duration::from_secs(1))
+            .fingerprint(OPERATION, b"{}")
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| async {
+                runs.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                Ok(issued())
+            })
+            .await
+            .expect("execute");
+        let retry: ExecutionOutcome<Issued> = store
+            .claim(&key, PROCESSING_TTL)
+            .fingerprint(OPERATION, b"{}")
+            .json()
+            .execute_or_replay(COMPLETED_TTL, |_token| async {
+                runs.fetch_add(1, Ordering::SeqCst);
+                Err(SignerDown.into())
+            })
+            .await
+            .expect("replay");
+
+        assert!(matches!(lapsed, ExecutionOutcome::Executed(_)));
+        let ExecutionOutcome::Replayed(value) = retry else {
+            panic!("expected the retry to replay");
+        };
+        assert_eq!(value, issued());
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 }

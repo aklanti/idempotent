@@ -1,4 +1,4 @@
-//! Response metadata
+//! Response metadata as ordered name and value pairs.
 
 use bytes::Bytes;
 

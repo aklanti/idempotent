@@ -43,8 +43,9 @@ impl MemoryStore {
         !self.tx.is_closed()
     }
 
-    /// Drops this handle's sender and awaits task exit. The task exits when the
-    /// LAST sender drops.
+    /// Drops this handle's sender and waits for the background task to stop.
+    ///
+    /// The task stops once the last sender drops, so other clones keep it alive.
     pub async fn close(self) {
         let Self { tx, task } = self;
         drop(tx);
@@ -63,7 +64,7 @@ impl MemoryStore {
         }
     }
 
-    /// Starts building a store with default settings
+    /// Starts building a store with default settings.
     pub const fn builder() -> MemoryStoreBuilder {
         MemoryStoreBuilder {
             buffer: 64,
@@ -248,7 +249,7 @@ impl MemoryStoreBuilder {
         self
     }
 
-    /// Set the runtime handle.
+    /// Sets the runtime the background task runs on, instead of the current one.
     pub fn runtime(mut self, handle: Handle) -> Self {
         self.runtime = Some(handle);
         self
@@ -297,6 +298,7 @@ mod tests {
     use crate::Metadata;
     use crate::entry::CachedResponse;
     use crate::entry::ExistingEntry;
+    use crate::fencing_token::Rejection;
     use crate::fingerprint::DefaultFingerprintStrategy;
     use crate::fingerprint::FingerprintStrategy;
 
@@ -607,7 +609,46 @@ mod tests {
 
         let second = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"second"), TTL);
         let rejected = store.complete(key.clone(), second, fencing_token);
-        expect_that!(rejected, eq(FencedOutcome::KeyExpired));
+        expect_that!(rejected, eq(FencedOutcome::Rejected(Rejection::KeyExpired)));
+
+        let replay = store.try_insert(key, IdempotencyEntry::new(fingerprint, TTL));
+        let InsertResult::Exists(ExistingEntry::Completed(entry)) = replay else {
+            panic!("expected Exists(Completed), got {replay:?}")
+        };
+        expect_that!(entry.response().body, eq(&Bytes::from_static(b"first")));
+    }
+
+    #[gtest]
+    fn foreign_token_after_complete_is_rejected() {
+        let mut store = MemoryStoreActor::new();
+        let key = IdempotencyKey::new("chimamanda").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/submit".into(), &[]);
+        let InsertResult::Claimed { fencing_token } =
+            store.try_insert(key.clone(), IdempotencyEntry::new(fingerprint, TTL))
+        else {
+            panic!("expected a fresh claim");
+        };
+        let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"first"), TTL);
+        expect_that!(
+            store.complete(key.clone(), completed, fencing_token),
+            eq(FencedOutcome::Applied)
+        );
+
+        // The attempt that lost the key learns another attempt owns it, not that it expired.
+        let foreign = FencingToken::new(fencing_token.run_id, fencing_token.sequence + 1);
+        let late = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"late"), TTL);
+        expect_that!(
+            store.complete(key.clone(), late, foreign),
+            eq(FencedOutcome::Rejected(Rejection::FencingMismatch))
+        );
+        expect_that!(
+            store.touch(&key, foreign, TTL),
+            eq(FencedOutcome::Rejected(Rejection::FencingMismatch))
+        );
+        expect_that!(
+            store.touch(&key, fencing_token, TTL),
+            eq(FencedOutcome::Rejected(Rejection::KeyExpired))
+        );
 
         let replay = store.try_insert(key, IdempotencyEntry::new(fingerprint, TTL));
         let InsertResult::Exists(ExistingEntry::Completed(entry)) = replay else {
@@ -630,7 +671,10 @@ mod tests {
         let foreign = DefaultFingerprintStrategy.compute(&"/submit".into(), b"different");
         let completed = IdempotencyEntry::new(foreign, TTL).complete(response(b"ok"), TTL);
         let rejected = store.complete(key.clone(), completed, fencing_token);
-        expect_that!(rejected, eq(FencedOutcome::FingerprintMismatch));
+        expect_that!(
+            rejected,
+            eq(FencedOutcome::Rejected(Rejection::FingerprintMismatch))
+        );
 
         let replay = store.try_insert(key, IdempotencyEntry::new(claimed, TTL));
         expect_that!(

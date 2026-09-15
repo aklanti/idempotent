@@ -3,12 +3,12 @@
 //! Claiming and completing are atomic via Lua scripts with no TOCTOU risk.
 //! The key-expiration uses native key TTL.
 //!
-//! The server must have AOF persistence enabled (`appendonly yes`) and eviction disabled
+//! The server must have AOF persistence enabled (`appendonly yes`) and eviction disabled,
 //! because a silent eviction under memory pressure breaks the at-most-once guarantee.
-//! Valkey Cluster is not supported, because the claim script writes the entry and the
-//! fencing-token counter, two keys in different slots, which a cluster refuses.
+//! Valkey Cluster is not supported. The claim script writes the entry and the fencing-token
+//! counter, two keys in different slots, which a cluster refuses.
 //!
-//! The fencing tokens have an associated server ID, so a token issued before a restart or a
+//! Every fencing token holds the server's run id, so a token issued before a restart or a
 //! failover never matches one issued after it.
 
 use std::fmt;
@@ -388,6 +388,7 @@ mod tests {
     use super::*;
     use crate::Metadata;
     use crate::entry::CachedResponse;
+    use crate::fencing_token::Rejection;
     use crate::fingerprint::DefaultFingerprintStrategy;
     use crate::fingerprint::FingerprintStrategy;
 
@@ -584,9 +585,15 @@ mod tests {
         };
         let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response, TTL);
         let stale = store.complete(&key, completed.clone(), before).await;
-        expect_that!(stale, ok(eq(&FencedOutcome::FencingMismatch)));
+        expect_that!(
+            stale,
+            ok(eq(&FencedOutcome::Rejected(Rejection::FencingMismatch)))
+        );
         let stale = store.touch(&key, before, TTL).await;
-        expect_that!(stale, ok(eq(&FencedOutcome::FencingMismatch)));
+        expect_that!(
+            stale,
+            ok(eq(&FencedOutcome::Rejected(Rejection::FencingMismatch)))
+        );
         let live = store.complete(&key, completed, after).await;
         expect_that!(live, ok(eq(&FencedOutcome::Applied)));
     }
@@ -610,7 +617,49 @@ mod tests {
 
         let second = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"second"), TTL);
         let rejected = store.complete(&key, second, fencing_token).await;
-        expect_that!(rejected, ok(eq(&FencedOutcome::KeyExpired)));
+        expect_that!(
+            rejected,
+            ok(eq(&FencedOutcome::Rejected(Rejection::KeyExpired)))
+        );
+
+        let replay = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await;
+        let Ok(InsertResult::Exists(ExistingEntry::Completed(entry))) = replay else {
+            panic!("expected Exists(Completed), got {replay:?}")
+        };
+        expect_that!(entry.response().body, eq(&Bytes::from_static(b"first")));
+    }
+
+    #[gtest]
+    #[tokio::test]
+    async fn foreign_token_after_complete_is_rejected() {
+        let (store, _container) = new_store().await;
+        let key = IdempotencyKey::new("sankara").expect("valid key");
+        let fingerprint = DefaultFingerprintStrategy.compute(&"/list".into(), &[]);
+        let Ok(InsertResult::Claimed { fencing_token }) = store
+            .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
+            .await
+        else {
+            panic!("expected a fresh claim");
+        };
+        let completed = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"first"), TTL);
+        expect_that!(
+            store.complete(&key, completed, fencing_token).await,
+            ok(eq(&FencedOutcome::Applied))
+        );
+
+        // The attempt that lost the key learns another attempt owns it, not that it expired.
+        let foreign = FencingToken::new(fencing_token.run_id, fencing_token.sequence + 1);
+        let late = IdempotencyEntry::new(fingerprint, TTL).complete(response(b"late"), TTL);
+        expect_that!(
+            store.complete(&key, late, foreign).await,
+            ok(eq(&FencedOutcome::Rejected(Rejection::FencingMismatch)))
+        );
+        expect_that!(
+            store.touch(&key, foreign, TTL).await,
+            ok(eq(&FencedOutcome::Rejected(Rejection::FencingMismatch)))
+        );
 
         let replay = store
             .try_insert(&key, IdempotencyEntry::new(fingerprint, TTL))
@@ -637,7 +686,10 @@ mod tests {
         let foreign = DefaultFingerprintStrategy.compute(&"/list".into(), b"different");
         let completed = IdempotencyEntry::new(foreign, TTL).complete(response(b"ok"), TTL);
         let rejected = store.complete(&key, completed, fencing_token).await;
-        expect_that!(rejected, ok(eq(&FencedOutcome::FingerprintMismatch)));
+        expect_that!(
+            rejected,
+            ok(eq(&FencedOutcome::Rejected(Rejection::FingerprintMismatch)))
+        );
 
         let replay = store
             .try_insert(&key, IdempotencyEntry::new(claimed, TTL))
@@ -671,7 +723,10 @@ mod tests {
         expect_that!(applied, ok(eq(&FencedOutcome::Applied)));
 
         let rejected = store.touch(&key, fencing_token, TTL).await;
-        expect_that!(rejected, ok(eq(&FencedOutcome::KeyExpired)));
+        expect_that!(
+            rejected,
+            ok(eq(&FencedOutcome::Rejected(Rejection::KeyExpired)))
+        );
     }
 
     #[gtest]
@@ -690,7 +745,7 @@ mod tests {
         let foreign = FencingToken::new(fencing_token.run_id, fencing_token.sequence + 1);
         expect_that!(
             store.remove(&key, foreign).await,
-            ok(eq(&FencedOutcome::FencingMismatch))
+            ok(eq(&FencedOutcome::Rejected(Rejection::FencingMismatch)))
         );
         expect_that!(
             store.remove(&key, fencing_token).await,
@@ -698,7 +753,7 @@ mod tests {
         );
         expect_that!(
             store.remove(&key, fencing_token).await,
-            ok(eq(&FencedOutcome::KeyExpired))
+            ok(eq(&FencedOutcome::Rejected(Rejection::KeyExpired)))
         );
 
         let reclaimed = store

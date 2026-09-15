@@ -1,9 +1,14 @@
 //! Idempotency entry types.
 //!
 //! These types are storage-agnostic and hold no timestamp or persistence concerns.
+use std::convert::Infallible;
 use std::time::Duration;
 
 use bytes::Bytes;
+#[cfg(feature = "json")]
+use serde::Serialize;
+#[cfg(feature = "json")]
+use serde::de::DeserializeOwned;
 
 use crate::Fingerprint;
 use crate::Metadata;
@@ -93,6 +98,60 @@ impl CachedResponse {
             metadata,
             body,
         }
+    }
+}
+
+/// What a side effect produces and how it is cached.
+///
+/// A [`CachedResponse`] is cached as it stands. [`Json`] puts any serialisable value in the
+/// response body, so a side effect can hand back its own type.
+pub trait Cacheable: Sized {
+    /// The error when converting to or from a cached response.
+    type Error: Into<Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Builds the response to cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be encoded.
+    fn to_response(&self) -> Result<CachedResponse, Self::Error>;
+
+    /// Reads the value back from a cached response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the response cannot be decoded.
+    fn from_response(response: CachedResponse) -> Result<Self, Self::Error>;
+}
+
+impl Cacheable for CachedResponse {
+    type Error = Infallible;
+
+    fn to_response(&self) -> Result<Self, Infallible> {
+        Ok(self.clone())
+    }
+
+    fn from_response(response: Self) -> Result<Self, Infallible> {
+        Ok(response)
+    }
+}
+
+/// A value cached as JSON in the response body.
+#[cfg(feature = "json")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Json<T>(pub T);
+
+#[cfg(feature = "json")]
+impl<T: Serialize + DeserializeOwned> Cacheable for Json<T> {
+    type Error = serde_json::Error;
+
+    fn to_response(&self) -> Result<CachedResponse, serde_json::Error> {
+        let body = serde_json::to_vec(&self.0)?;
+        Ok(CachedResponse::new(200, Metadata::new(), body.into()))
+    }
+
+    fn from_response(response: CachedResponse) -> Result<Self, serde_json::Error> {
+        serde_json::from_slice(&response.body).map(Self)
     }
 }
 

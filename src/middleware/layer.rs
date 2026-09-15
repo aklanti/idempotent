@@ -46,6 +46,7 @@ use crate::fencing_token::FencingToken;
 use crate::fingerprint::DefaultFingerprintStrategy;
 use crate::fingerprint::FingerprintStrategy;
 use crate::fingerprint::Operation;
+use crate::guard::CacheOutcome;
 
 /// A boxed error.
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -186,8 +187,8 @@ impl<S> IdempotencyLayer<S> {
     /// Sets the processing lease, the time a claim survives a worker that died holding it.
     ///
     /// Sixty seconds by default. The lease is renewed while the handler runs, so it does not
-    /// bound the handler; [`keep_alive`](Self::keep_alive) does. A zero lease fences every
-    /// completion.
+    /// bound the handler. [`keep_alive`](Self::keep_alive) does. With a zero lease every
+    /// completion is rejected, so nothing is cached.
     pub const fn processing_ttl(mut self, ttl: Duration) -> Self {
         self.settings.processing_ttl = ttl;
         self
@@ -230,11 +231,13 @@ impl<S> IdempotencyLayer<S> {
     /// Scopes every key to the caller that `hook` finds in the request.
     ///
     /// The hook sees the request without its body and returns the caller's identity, such as a
-    /// tenant id an authentication layer put in the extensions. Without a scope, anyone who
-    /// presents a key with the same request gets the cached response, so a service with more
-    /// than one client needs one. The stored key is what [`stored_key`] builds from the scope
-    /// and the client's key, which limits the client's key to 222 bytes. When the hook returns
-    /// nothing, or an empty string, the request is rejected with 400.
+    /// tenant id that an authentication layer put in the extensions. Without a scope, anyone who
+    /// presents a key with the same request gets the cached response. A service with more than
+    /// one client needs a scope.
+    ///
+    /// [`stored_key`] builds the key the store holds from the scope and the client's key, which
+    /// leaves the client 222 bytes. A hook that returns nothing, or an empty string, rejects the
+    /// request with 400.
     pub fn scope<F>(mut self, hook: F) -> Self
     where
         F: Fn(&Parts) -> Option<String> + Send + Sync + 'static,
@@ -254,8 +257,9 @@ impl<S> IdempotencyLayer<S> {
 
     /// Sets how long the processing lease is renewed while the handler runs.
     ///
-    /// Ten minutes by default. Past the ceiling the lease lapses, and the completion is fenced
-    /// while the response is still returned.
+    /// Ten minutes by default. Past the ceiling the lease lapses. A handler that finishes later
+    /// still caches its response if nothing took the key. If another request did, the client
+    /// gets what the key holds instead.
     pub const fn keep_alive(mut self, ceiling: Duration) -> Self {
         self.settings.keep_alive = ceiling;
         self
@@ -264,8 +268,8 @@ impl<S> IdempotencyLayer<S> {
     /// Caps the requests with a key running at once, answering 503 past the cap.
     ///
     /// No cap by default, and a cap of zero sheds every request with a key. The work for a
-    /// request with a key outlives the response future, so this is the one limit that sees it;
-    /// a limit outside the layer does not. A request shed here has made no store call.
+    /// request with a key outlives the response future, so this is the one limit that sees it.
+    /// A limit outside the layer does not. A request shed here has made no store call.
     pub fn max_in_flight(mut self, limit: usize) -> Self {
         self.settings.max_in_flight = Arc::new(Semaphore::new(limit));
         self
@@ -451,28 +455,7 @@ where
         Ok(ClaimOutcome::Exists {
             existing,
             fingerprint,
-        }) => {
-            return Ok(match existing.replay(fingerprint) {
-                ReplayOutcome::Replayed(cached) => {
-                    outcome("replayed");
-                    #[cfg(feature = "tracing")]
-                    tracing::info!("replaying cached response");
-                    replay(cached)
-                }
-                ReplayOutcome::InFlight => {
-                    outcome("in_flight");
-                    #[cfg(feature = "tracing")]
-                    tracing::warn!("request in flight, returning 409");
-                    IdempotencyRejection::InFlight.render()
-                }
-                ReplayOutcome::FingerprintMismatch => {
-                    outcome("mismatch");
-                    #[cfg(feature = "tracing")]
-                    tracing::warn!("fingerprint mismatch, returning 400");
-                    IdempotencyRejection::FingerprintMismatch.render()
-                }
-            });
-        }
+        }) => return Ok(replay_or_reject(existing.replay(fingerprint))),
         Err(error) => {
             outcome("error");
             store_failed("claim", &error);
@@ -500,7 +483,7 @@ where
                 #[cfg(feature = "tracing")]
                 tracing::info!("handler declined caching, claim released");
             }
-            Ok(_rejection) => {
+            Ok(FencedOutcome::Rejected(_rejection)) => {
                 #[cfg(feature = "tracing")]
                 tracing::warn!(
                     rejection = ?_rejection,
@@ -537,17 +520,17 @@ where
         metadata: storable_headers(&parts.headers),
         body: bytes.clone(),
     };
-    match guard.complete(cached, settings.completed_ttl).await {
-        Ok(FencedOutcome::Applied) => {
+    match guard.cache(cached, settings.completed_ttl).await {
+        Ok(CacheOutcome::Cached) => {
             outcome("executed");
             #[cfg(feature = "tracing")]
             tracing::debug!("executed, response cached");
         }
-        Ok(_rejection) => {
-            outcome("fenced");
-            #[cfg(feature = "tracing")]
-            tracing::warn!(rejection = ?_rejection, "the store rejected the completion after the handler ran");
-        }
+        Ok(CacheOutcome::Uncached {
+            replay: Some(replay),
+            ..
+        }) => return Ok(replay_or_reject(replay)),
+        Ok(CacheOutcome::Uncached { .. }) => outcome("uncached"),
         Err(error) => {
             outcome("uncached");
             store_failed("completion", &error);
@@ -582,6 +565,30 @@ fn store_failed<E: std::fmt::Display>(operation: &'static str, error: &TimeoutSt
 /// Logs a failed store call at error, telling a timeout from a failure.
 #[cfg(not(feature = "tracing"))]
 const fn store_failed<E>(_operation: &'static str, _error: &TimeoutStoreError<E>) {}
+
+/// Sends what the key holds, a replay of its cached response or a rejection.
+fn replay_or_reject<B: From<Bytes>>(reply: ReplayOutcome) -> Response<B> {
+    match reply {
+        ReplayOutcome::Replayed(cached) => {
+            outcome("replayed");
+            #[cfg(feature = "tracing")]
+            tracing::info!("replaying the cached response");
+            replay(cached)
+        }
+        ReplayOutcome::InFlight => {
+            outcome("in_flight");
+            #[cfg(feature = "tracing")]
+            tracing::warn!("another request holds the key, returning 409");
+            IdempotencyRejection::InFlight.render()
+        }
+        ReplayOutcome::FingerprintMismatch => {
+            outcome("mismatch");
+            #[cfg(feature = "tracing")]
+            tracing::warn!("the key was reused with a different request, returning 400");
+            IdempotencyRejection::FingerprintMismatch.render()
+        }
+    }
+}
 
 /// Rebuilds a cached response and marks it as replayed.
 fn replay<B: From<Bytes>>(cached: CachedResponse) -> Response<B> {
@@ -1481,7 +1488,7 @@ mod service_tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn handler_past_the_ceiling_completes_fenced() {
+    async fn handler_past_the_ceiling_caches_under_a_new_claim() {
         let handler = Handler::new(|_| async {
             tokio::time::sleep(Duration::from_secs(10)).await;
             text(StatusCode::CREATED, "issued")
@@ -1494,10 +1501,42 @@ mod service_tests {
         let Ok(first) = service.clone().oneshot(post(Some(KEY), "{}")).await;
         let Ok(second) = service.oneshot(post(Some(KEY), "{}")).await;
 
+        // Nothing took the key while the handler ran, so its response is still cached under it.
         assert_eq!(first.status(), StatusCode::CREATED);
         assert_eq!(&body(first).await[..], b"issued");
+        assert!(replayed(&second));
+        assert_eq!(&body(second).await[..], b"issued");
+        assert_eq!(handler.runs(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn handler_that_lost_the_key_replays_the_winner() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let slow = Handler::gated(&started, &release);
+        let quick = Handler::answering(StatusCode::CREATED, "winner");
+        let store = store();
+        let slow_service = IdempotencyLayer::new(store.clone())
+            .processing_ttl(Duration::from_secs(1))
+            .keep_alive(Duration::ZERO)
+            .layer(slow.clone());
+        let quick_service = IdempotencyLayer::new(store).layer(quick.clone());
+
+        let first = tokio::spawn(slow_service.oneshot(post(Some(KEY), "{}")));
+        started.notified().await;
+        // The slow handler's lease lapses, and the next request takes the key and completes it.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let Ok(second) = quick_service.oneshot(post(Some(KEY), "{}")).await;
+        release.notify_one();
+        let Ok(first) = first.await.expect("first request");
+
+        assert_eq!(second.status(), StatusCode::CREATED);
         assert!(!replayed(&second));
-        assert_eq!(handler.runs(), 2);
+        assert_eq!(first.status(), StatusCode::CREATED);
+        assert!(replayed(&first));
+        assert_eq!(&body(first).await[..], b"winner");
+        assert_eq!(slow.runs(), 1);
+        assert_eq!(quick.runs(), 1);
     }
 
     #[tokio::test(start_paused = true)]

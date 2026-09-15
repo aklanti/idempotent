@@ -9,17 +9,22 @@ local stored = redis.call('HMGET', KEYS[1], 'run_id', 'ft', 'fp', 'status')
 if not stored[2] then
     return 2
 end
+
+-- Another attempt holds the key, whether it is still running or has completed.
+if stored[1] ~= ARGV[2] or stored[2] ~= ARGV[3] then
+    return 1
+end
+
 -- Only a live claim can be completed; a completed entry keeps its cached response.
 if stored[4] ~= 'in_progress' then
     return 2
 end
-if stored[1] ~= ARGV[2] or stored[2] ~= ARGV[3] then
-    return 1
-end
+
 local stored_fingerprint = stored[3]
 if stored_fingerprint and stored_fingerprint ~= ARGV[5] then
     return 3
 end
+
 redis.call('HSET', KEYS[1], 'status', 'complete', 'data', ARGV[1])
 redis.call('PEXPIRE', KEYS[1], ARGV[4])
 return 0

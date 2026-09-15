@@ -60,11 +60,7 @@ pub fn body<T: Hash + ?Sized>(value: &T) -> [u8; 16] {
     hasher.digest128().to_le_bytes()
 }
 
-/// The request an idempotency key protects: the method, the path, and the query.
-///
-/// The fingerprint hashes the operation and the body, so a key reused for a different
-/// operation is a mismatch. Any string converts into one; `"POST /credentials/issue"` is the
-/// shape the middleware builds from a request head.
+/// The method, the path, and the query of the request an idempotency key protects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Operation(String);
 

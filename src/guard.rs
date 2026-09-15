@@ -9,8 +9,11 @@ use crate::FencedOutcome;
 use crate::IdempotencyEntry;
 use crate::IdempotencyKey;
 use crate::IdempotencyStore;
+use crate::InsertResult;
+use crate::ReplayOutcome;
 use crate::entry::Processing;
 use crate::fencing_token::FencingToken;
+use crate::fencing_token::Rejection;
 
 /// A borrowed handle to a claimed key.
 pub struct ClaimGuard<'a, S: IdempotencyStore> {
@@ -38,6 +41,16 @@ impl<'a, S: IdempotencyStore> ClaimGuard<'a, S> {
 }
 
 impl<S: IdempotencyStore> ClaimGuard<'_, S> {
+    /// Borrows the claim this guard holds.
+    const fn claim(&self) -> Claim<'_, S> {
+        Claim {
+            store: self.store,
+            key: self.key,
+            entry: &self.entry,
+            fencing_token: self.fencing_token,
+        }
+    }
+
     /// Returns the fencing token issued for this claim.
     pub const fn fencing_token(&self) -> FencingToken {
         self.fencing_token
@@ -49,7 +62,7 @@ impl<S: IdempotencyStore> ClaimGuard<'_, S> {
     ///
     /// Returns an error if the store operation fails.
     pub async fn touch(&self, ttl: Duration) -> Result<FencedOutcome, S::Error> {
-        self.store.touch(self.key, self.fencing_token, ttl).await
+        self.claim().touch(ttl).await
     }
 
     /// Consumes the guard and caches the response as the completed result under `completed_ttl`.
@@ -68,10 +81,7 @@ impl<S: IdempotencyStore> ClaimGuard<'_, S> {
         response: CachedResponse,
         completed_ttl: Duration,
     ) -> Result<FencedOutcome, S::Error> {
-        let entry = self.entry.complete(response, completed_ttl);
-        self.store
-            .complete(self.key, entry, self.fencing_token)
-            .await
+        self.claim().complete(response, completed_ttl).await
     }
 
     /// Renews the lease every half lease until the ceiling or a lost lease, then waits forever.
@@ -79,14 +89,27 @@ impl<S: IdempotencyStore> ClaimGuard<'_, S> {
     /// A store error is logged and the renewal continues. A zero lease is not renewed. Dropping
     /// the future mid touch is safe.
     pub async fn keep_alive(&self, lease: Duration, ceiling: Duration) -> Infallible {
-        renew(|ttl| self.touch(ttl), self.key, lease, ceiling).await
+        self.claim().keep_alive(lease, ceiling).await
+    }
+
+    /// Caches the response, and claims the key again if this claim was lost.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a store operation fails.
+    pub(crate) async fn cache(
+        self,
+        response: CachedResponse,
+        completed_ttl: Duration,
+    ) -> Result<CacheOutcome, S::Error> {
+        self.claim().cache(response, completed_ttl).await
     }
 }
 
 /// An owned claim handle that can outlive the current stack frame.
 ///
 /// If it is dropped before [`complete`](Self::complete) or [`leave`](Self::leave) runs, a
-/// detached task frees the claim so a retry can rerun the side effect. Dropped during
+/// detached task frees the claim so a retry can re-run the side effect. Dropped during
 /// `complete`, it leaves the claim in place, since the store may or may not have applied the
 /// write.
 ///
@@ -127,13 +150,23 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
         self.fencing_token
     }
 
+    /// Borrows the claim this guard holds.
+    const fn claim(&self) -> Claim<'_, S> {
+        Claim {
+            store: &self.store,
+            key: &self.key,
+            entry: &self.entry,
+            fencing_token: self.fencing_token,
+        }
+    }
+
     /// Extends the claim's lease by `ttl`, keeping it alive while the side effect runs.
     ///
     /// # Errors
     ///
     /// Returns an error if the store operation fails.
     pub async fn touch(&self, ttl: Duration) -> Result<FencedOutcome, S::Error> {
-        self.store.touch(&self.key, self.fencing_token, ttl).await
+        self.claim().touch(ttl).await
     }
 
     /// Consumes the guard and caches the response as the completed result under `completed_ttl`.
@@ -151,10 +184,7 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
         completed_ttl: Duration,
     ) -> Result<FencedOutcome, S::Error> {
         self.recover_on_drop = false;
-        let entry = self.entry.clone().complete(response, completed_ttl);
-        self.store
-            .complete(&self.key, entry, self.fencing_token)
-            .await
+        self.claim().complete(response, completed_ttl).await
     }
 
     /// Consumes the guard and leaves the claim in place until its lease expires.
@@ -170,7 +200,21 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
     /// A store error is logged and the renewal continues. A zero lease is not renewed. Dropping
     /// the future mid touch is safe.
     pub async fn keep_alive(&self, lease: Duration, ceiling: Duration) -> Infallible {
-        renew(|ttl| self.touch(ttl), &self.key, lease, ceiling).await
+        self.claim().keep_alive(lease, ceiling).await
+    }
+
+    /// Caches the response, and claims the key again if this claim was lost.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a store operation fails.
+    pub(crate) async fn cache(
+        mut self,
+        response: CachedResponse,
+        completed_ttl: Duration,
+    ) -> Result<CacheOutcome, S::Error> {
+        self.recover_on_drop = false;
+        self.claim().cache(response, completed_ttl).await
     }
 }
 
@@ -209,6 +253,119 @@ impl<S: IdempotencyStore + Clone> Drop for OwnedClaimGuard<S> {
     }
 }
 
+/// The outcome of caching a response under a claim.
+#[derive(Debug)]
+pub(crate) enum CacheOutcome {
+    /// The response is cached under the key.
+    Cached,
+    /// The response is not cached, and the store's rejection says why.
+    Uncached {
+        /// The reason the store rejected the completion.
+        rejection: Rejection,
+        /// The outcome a retry gets, when another attempt owns the key.
+        #[cfg_attr(
+            not(feature = "middleware"),
+            expect(dead_code, reason = "only the layer acts on what the key holds")
+        )]
+        replay: Option<ReplayOutcome>,
+    },
+}
+
+/// The claim a guard holds, with the store and the key it acts on.
+///
+/// Both guards hold the same four values and differ only in how they own them, so the store
+/// calls live here and each guard keeps what ownership adds.
+struct Claim<'a, S> {
+    store: &'a S,
+    key: &'a IdempotencyKey,
+    entry: &'a IdempotencyEntry<Processing>,
+    fencing_token: FencingToken,
+}
+
+impl<S> Clone for Claim<'_, S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for Claim<'_, S> {}
+
+impl<S: IdempotencyStore> Claim<'_, S> {
+    /// Extends the lease by `ttl`.
+    async fn touch(self, ttl: Duration) -> Result<FencedOutcome, S::Error> {
+        self.store.touch(self.key, self.fencing_token, ttl).await
+    }
+
+    /// Caches `response` as the completed result under `completed_ttl`.
+    async fn complete(
+        self,
+        response: CachedResponse,
+        completed_ttl: Duration,
+    ) -> Result<FencedOutcome, S::Error> {
+        let entry = self.entry.clone().complete(response, completed_ttl);
+        self.store
+            .complete(self.key, entry, self.fencing_token)
+            .await
+    }
+
+    /// Renews the lease every half lease until the ceiling or a lost lease, then waits forever.
+    async fn keep_alive(self, lease: Duration, ceiling: Duration) -> Infallible {
+        renew(|ttl| self.touch(ttl), self.key, lease, ceiling).await
+    }
+
+    /// Caches `response`, and claims the key again if the store rejects the write.
+    ///
+    /// A rejection means this claim was lost while the side effect ran. Claiming the key again
+    /// shows what holds it now. If the key is free, the response goes in under the new claim. If
+    /// another attempt has taken it, that attempt keeps it, and the caller finds out what a
+    /// retry gets.
+    async fn cache(
+        self,
+        response: CachedResponse,
+        completed_ttl: Duration,
+    ) -> Result<CacheOutcome, S::Error> {
+        let FencedOutcome::Rejected(rejection) =
+            self.complete(response.clone(), completed_ttl).await?
+        else {
+            return Ok(CacheOutcome::Cached);
+        };
+        #[cfg(feature = "tracing")]
+        tracing::warn!(
+            key = %self.key,
+            ?rejection,
+            "the store rejected the completion after the side effect ran, claiming the key again"
+        );
+
+        match self.store.try_insert(self.key, self.entry.clone()).await? {
+            InsertResult::Claimed { fencing_token } => {
+                let claimed = Self {
+                    fencing_token,
+                    ..self
+                };
+                match claimed.complete(response.clone(), completed_ttl).await? {
+                    FencedOutcome::Applied => Ok(CacheOutcome::Cached),
+                    FencedOutcome::Rejected(rejection) => {
+                        #[cfg(feature = "tracing")]
+                        tracing::warn!(
+                            key = %self.key,
+                            ?rejection,
+                            "the new claim was lost before the response was cached"
+                        );
+                        Ok(CacheOutcome::Uncached {
+                            rejection,
+                            replay: None,
+                        })
+                    }
+                }
+            }
+            InsertResult::Exists(existing) => Ok(CacheOutcome::Uncached {
+                rejection,
+                replay: Some(existing.replay(self.entry.fingerprint)),
+            }),
+        }
+    }
+}
+
 /// Renews the lease every half lease until the ceiling or a lost lease, then waits forever.
 async fn renew<F, Fut, E>(
     mut touch: F,
@@ -232,9 +389,9 @@ where
             tokio::time::sleep(interval).await;
             match touch(lease).await {
                 Ok(FencedOutcome::Applied) => {}
-                Ok(_lost) => {
+                Ok(FencedOutcome::Rejected(_lost)) => {
                     #[cfg(feature = "tracing")]
-                    tracing::warn!(key = %key, outcome = ?_lost, "the processing lease was lost");
+                    tracing::warn!(key = %key, rejection = ?_lost, "the processing lease was lost");
                     return;
                 }
                 Err(_error) => {
@@ -259,9 +416,9 @@ mod tests {
     use crate::IdempotencyKey;
     use crate::IdempotencyStore;
     use crate::InsertResult;
+    use crate::claim::OwnedClaimOutcome;
     use crate::fingerprint::DefaultFingerprintStrategy;
     use crate::fingerprint::FingerprintStrategy;
-    use crate::store::claim::OwnedClaimOutcome;
     use crate::store::memory::MemoryStore;
 
     const TTL: Duration = Duration::from_secs(60);

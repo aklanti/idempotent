@@ -22,16 +22,28 @@ impl FencingToken {
 pub enum FencedOutcome {
     /// The operation is complete and the result stored.
     Applied,
-    /// The supplied and expected fencing token do not match.
+    /// The store rejected the operation, and nothing was written.
+    Rejected(Rejection),
+}
+
+/// The reason a store rejected a fencing-guarded operation.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Rejection {
+    /// The supplied and expected fencing tokens do not match.
     FencingMismatch,
-    /// No live claim holds the key. It expired, was removed, or is already completed.
+    /// No live claim holds the key. It expired, was removed, or this claim already completed.
     KeyExpired,
     /// The completing request's fingerprint does not match the claimed request.
     ///
-    /// Only a direct call to [`IdempotencyStore::complete`](crate::IdempotencyStore::complete)
-    /// can produce it; the claim guards build the completed entry from the claim's own
-    /// fingerprint.
+    /// Only a direct call to [`IdempotencyStore::complete`](crate::IdempotencyStore::complete) can
+    /// produce it; the claim guards build the completed entry from the claim's own fingerprint.
     FingerprintMismatch,
+}
+
+impl From<Rejection> for FencedOutcome {
+    fn from(rejection: Rejection) -> Self {
+        Self::Rejected(rejection)
+    }
 }
 
 #[cfg(feature = "valkey")]
@@ -40,9 +52,9 @@ impl FencedOutcome {
     pub(crate) const fn from_sentinel(value: i64) -> Option<Self> {
         match value {
             0 => Some(Self::Applied),
-            1 => Some(Self::FencingMismatch),
-            2 => Some(Self::KeyExpired),
-            3 => Some(Self::FingerprintMismatch),
+            1 => Some(Self::Rejected(Rejection::FencingMismatch)),
+            2 => Some(Self::Rejected(Rejection::KeyExpired)),
+            3 => Some(Self::Rejected(Rejection::FingerprintMismatch)),
             _ => None,
         }
     }

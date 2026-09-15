@@ -12,6 +12,7 @@ use crate::entry::ExistingEntry;
 use crate::entry::IdempotencyEntry;
 use crate::entry::Processing;
 use crate::fencing_token::FencingToken;
+use crate::fencing_token::Rejection;
 use crate::key::IdempotencyKey;
 
 #[derive(Debug, Default)]
@@ -104,26 +105,26 @@ impl MemoryStoreActor {
         entry: IdempotencyEntry<Completed>,
         fencing_token: FencingToken,
     ) -> FencedOutcome {
-        if let Some(record) = self
+        let Some(record) = self
             .entries
             .get_mut(&key)
             .filter(|record| !record.is_expired())
-            && let ExistingEntry::Processing(processing) = &record.existing
-        {
-            let claimed_fingerprint = processing.fingerprint;
-            if record.fencing_token != fencing_token {
-                return FencedOutcome::FencingMismatch;
-            }
-            if claimed_fingerprint != entry.fingerprint {
-                return FencedOutcome::FingerprintMismatch;
-            }
-            record.ttl = entry.ttl;
-            record.existing = ExistingEntry::Completed(entry);
-            record.created_at = Instant::now();
-            return FencedOutcome::Applied;
+        else {
+            return Rejection::KeyExpired.into();
+        };
+        if record.fencing_token != fencing_token {
+            return Rejection::FencingMismatch.into();
         }
-
-        FencedOutcome::KeyExpired
+        let ExistingEntry::Processing(processing) = &record.existing else {
+            return Rejection::KeyExpired.into();
+        };
+        if processing.fingerprint != entry.fingerprint {
+            return Rejection::FingerprintMismatch.into();
+        }
+        record.ttl = entry.ttl;
+        record.existing = ExistingEntry::Completed(entry);
+        record.created_at = Instant::now();
+        FencedOutcome::Applied
     }
 
     pub fn remove(&mut self, key: &IdempotencyKey, fencing_token: FencingToken) -> FencedOutcome {
@@ -135,32 +136,34 @@ impl MemoryStoreActor {
             Some(_) => {
                 #[cfg(feature = "tracing")]
                 tracing::warn!(key = %key, "remove rejected: fencing mismatch");
-                FencedOutcome::FencingMismatch
+                Rejection::FencingMismatch.into()
             }
-            None => FencedOutcome::KeyExpired,
+            None => Rejection::KeyExpired.into(),
         }
     }
 
-    fn touch(
+    pub fn touch(
         &mut self,
         key: &IdempotencyKey,
         fencing_token: FencingToken,
         ttl: Duration,
     ) -> FencedOutcome {
-        if let Some(record) = self
+        let Some(record) = self
             .entries
             .get_mut(key)
             .filter(|record| !record.is_expired())
-            && let ExistingEntry::Processing(_) = &record.existing
-        {
-            if record.fencing_token == fencing_token {
-                record.created_at = Instant::now();
-                record.ttl = ttl;
-                return FencedOutcome::Applied;
-            }
-            return FencedOutcome::FencingMismatch;
+        else {
+            return Rejection::KeyExpired.into();
+        };
+        if record.fencing_token != fencing_token {
+            return Rejection::FencingMismatch.into();
         }
-        FencedOutcome::KeyExpired
+        let ExistingEntry::Processing(_) = &record.existing else {
+            return Rejection::KeyExpired.into();
+        };
+        record.created_at = Instant::now();
+        record.ttl = ttl;
+        FencedOutcome::Applied
     }
 
     pub fn sweep(&mut self) {
