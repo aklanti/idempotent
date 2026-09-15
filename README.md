@@ -5,7 +5,7 @@
 
 # idempotent
 
-At-most-once execution of side effects: for a given idempotency key the side effect runs at most once, and every retry within the TTL window receives the cached response.
+At-most-once execution of side effects. For a given idempotency key the side effect runs at most once, and every retry within the TTL window receives the cached response.
 
 ## Highlights
 
@@ -22,7 +22,7 @@ Add to your `Cargo.toml`
 
 ```toml
 [dependencies]
-idempotent = { version = "1.1.0", features = ["memory"] }
+idempotent = { version = "2.0.0", features = ["memory"] }
 ```
 
 ### Quick example
@@ -73,13 +73,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The first request for the offer claims its key for 30 seconds, the processing lease, while the credential is signed. The signed credential is cached for a day, the completed lease, so a retry within that day gets the same credential rather than a second one. A retry while the first request is still signing gets `InFlight`, and a retry with a different request body gets `FingerprintMismatch`. If signing fails, the claim is left to expire so a later retry tries again.
+The first request claims the key for 30 seconds while the credential is signed, then caches it for a day. Every retry within that day gets the same credential. A retry while the first is still signing gets `InFlight`, and the same key with a different body gets `FingerprintMismatch`. If signing fails, the claim expires and a later retry tries again. `Fenced` is the rare case where the lease lapsed and another request took the key first, so the credential was issued but never cached.
 
-For control over each step, `try_insert` returns a `ClaimGuard` to `touch` while the work runs and to `complete` with the response. For a side effect slower than the processing lease, `keep_alive` on the builder renews the lease while it runs, up to a ceiling; past the ceiling the lease lapses and the completion reports `Fenced`.
+For control over each step, `try_insert` returns a `ClaimGuard` to `touch` while the work runs and to `complete` with the response. For a side effect slower than the processing lease, `keep_alive` on the builder renews the lease while it runs, up to a ceiling. Past the ceiling the lease lapses, so the next attempt can take the key.
+
+### Values instead of responses
+
+With the `json` feature, `json()` takes a side effect that returns your own type, cached as JSON in the response body. The outcome is the same one the response path returns, carrying your type instead of a response.
+
+```rust
+use std::time::Duration;
+
+use idempotent::memory::MemoryStore;
+use idempotent::ExecutionOutcome;
+use idempotent::IdempotencyKey;
+use idempotent::IdempotencyStore;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Serialize, Deserialize)]
+struct Credential {
+    id: String,
+}
+
+async fn sign() -> Result<Credential, Box<dyn std::error::Error + Send + Sync>> {
+    Ok(Credential { id: "cred-1".to_owned() })
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let store = MemoryStore::builder().try_build()?;
+    let key = IdempotencyKey::new("offer-8f21")?;
+
+    let outcome = store
+        .claim(&key, Duration::from_secs(30))
+        .fingerprint("POST /credentials/issue", b"{}")
+        .json()
+        .execute_or_replay(Duration::from_secs(24 * 60 * 60), |_token| sign())
+        .await?;
+
+    match outcome {
+        ExecutionOutcome::Executed(credential) => println!("issued {}", credential.id),
+        ExecutionOutcome::Replayed(credential) => println!("same credential again: {}", credential.id),
+        ExecutionOutcome::Fenced { response, .. } => println!("issued {} but never cached", response.id),
+        ExecutionOutcome::InFlight => println!("the first request is still signing it"),
+        ExecutionOutcome::FingerprintMismatch => println!("the key was reused for a different request"),
+    }
+    Ok(())
+}
+```
+
+Returning `Json(value)` from the side effect does the same thing without the builder step, and any type can be cached by implementing `Cacheable`. A failing side effect is boxed on the way out, and `ExecutionError::into_side_effect_error` takes it back out.
 
 ### Owned claims
 
-`claim_owned` returns a builder whose futures own a clone of the store and the key, so a claim can live in a struct, move into a spawned task, or run on another runtime. Dropping an owned claim mid side effect frees the key at once; a failed side effect leaves it to expire, as on the borrowing path; `leave` keeps it deliberately.
+`claim_owned` returns a builder whose futures own a clone of the store and the key, so a claim can live in a struct, move into a spawned task, or run on another runtime. Dropping an owned claim mid side effect frees the key at once. A failed side effect leaves it to expire, as on the borrowing path, and `leave` keeps it deliberately.
 
 ```rust
 use std::time::Duration;
@@ -164,11 +212,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 A credential issued twice is two valid credentials in circulation, and a card charged twice is two charges. Complete the claim only when the side effect fully succeeded. If it fails part way, return an error from the side effect so the claim is left to expire, and reconcile before it does. The library cannot know what the side effect did.
 
-If the process dies after the side effect ran but before the completion was stored, the retry runs the side effect again. At-most-once holds only when the side effect and its completion share a failure domain, for example a database transaction that writes both, or when the side effect is itself idempotent.
+If the process dies after the side effect ran but before the completion was stored, the retry runs the side effect again. At-most-once holds only when the side effect and its completion share a failure domain, such as a database transaction that writes both. It also holds when the side effect is itself idempotent.
 
 ### Running on Valkey
 
-Enable AOF persistence (`appendonly yes`) and disable eviction (`maxmemory-policy noeviction`): an evicted key loses its claim, and the retry runs again. Use a single node; Valkey Cluster is not supported, because the claim script writes the entry and the fencing-token counter, two keys in different slots, which a cluster refuses. A failover to a replica changes the server's run id, so attempts started on the old primary are fenced after promotion, but claims that had not replicated are gone with their keys. With `appendfsync everysec` a crash can still lose the last second of claims; `appendfsync always` closes that window at one fsync per claim.
+Enable AOF persistence (`appendonly yes`) and disable eviction (`maxmemory-policy noeviction`), because an evicted key loses its claim and the retry runs again. Use a single node. Valkey Cluster is not supported, because the claim script writes the entry and the fencing-token counter, two keys in different slots, which a cluster refuses. A failover to a replica changes the server's run id, so attempts started on the old primary are fenced after promotion. Claims that had not replicated are gone with their keys. With `appendfsync everysec` a crash can still lose the last second of claims; `appendfsync always` closes that window at one fsync per claim.
 
 `with_url` builds a store from a connection string; `with_client` and `with_connection_manager` take a redis client or a manager the application already holds. Every connection attempt and every command is bounded, five seconds each by default:
 
@@ -223,13 +271,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Scope every key by the caller in a service with more than one client, or one client can replay another's response. Everything the handler returns is cached, failures included. A handler that rejected a request before doing anything marks its response `cache-control: no-store`, and the layer frees the key. The [middleware module docs][url-middleware] cover capacity, limits, and shutdown.
+Scope every key by the caller in a service with more than one client, or one client can replay another's response. Everything the handler returns is cached, failures included. A handler that rejected a request before doing anything marks its response `cache-control: no-store`, and the layer frees the key. A handler that outlives its lease can lose the key to another request. It then sends that request's cached response, or 409 while it is still running, rather than its own. The [middleware module docs][url-middleware] cover capacity, limits, and shutdown.
 
 ## Optional features
 
 - **middleware:** `IdempotencyLayer`, a Tower layer for HTTP services
 - **axum:** `IdempotencyRejection` as a response and `IdempotencyKey` as an extractor
-- **json:** `run` on the claim builders, which stores a side effect's value as JSON and returns it to retries
+- **json:** `json()` on the claim builders and `Json`, which cache a side effect's value as JSON and return it to retries
 - **memory:** the in-memory store, for development or a single process
 - **valkey:** the Valkey/Redis store, using Lua scripts for atomic operations
 - **tracing:** instruments store operations with [`tracing`][url-tracing] spans and events

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/aklanti/idempotent/compare/v1.1.0...v2.0.0) - 2026-09-16
+
+### Breaking changes
+
+- Replace `run` with a payload: `execute_or_replay` takes any `Cacheable` side effect, `Json` caches a value as JSON, and `json()` on both builders is the same thing without the wrapper, so one verb covers both payloads and `RunError` is gone
+- Parameterise `ExecutionOutcome` over the response it holds, defaulting to `CachedResponse`, and add `map` to change it
+- Report a value claim's in flight, reuse, and supersession as outcomes rather than errors, matching the response path, where supersession is `Fenced`
+- Add `ExecutionError::Payload` for a value that cannot be encoded or decoded, and `ExecutionError::into_side_effect_error`, which takes the side effect's own error back out of the box
+- Report a fencing mismatch from `complete` and `touch` for a token another attempt replaced, including on a key that attempt already completed, where a completed key reported an expired key
+- State in `IdempotencyStore::complete` which outcome each case reports, so a store written outside the crate matches the built-in ones
+- Move the claim builders and their outcomes from `store::claim` to `claim`, since they sit over a store rather than in one; the crate root re-exports them as before
+- Split `FencedOutcome` into `Applied` and `Rejected(Rejection)`, where `Rejection` holds the three refusals, and type `ExecutionOutcome::Fenced`'s field as a `Rejection`, so an outcome that cannot be applied can no longer say it was; `Rejection` converts into `FencedOutcome`
+
+### Fixes
+
+- Cache the response under a fresh claim when a completion is rejected and the key is free, so a lapsed claim no longer costs a second run of the side effect, on every entry point
+- Stop sending a handler's response after another request took its key, and replay that request's cached response instead, or send 409 while it is still running
+
 ## [1.1.0](https://github.com/aklanti/idempotent/compare/v1.0.0...v1.1.0) - 2026-09-14
 
 ### Features
