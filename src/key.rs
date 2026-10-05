@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+use sha2::Digest;
+use sha2::Sha256;
+
 use crate::Error;
 
 /// A validated idempotency key.
@@ -13,6 +16,11 @@ impl IdempotencyKey {
     const MAX_LEN: usize = u8::MAX as usize;
     /// Separates a store prefix from a key, so keys and prefixes cannot contain it.
     const PREFIX_SEPARATOR: char = ':';
+    /// The length of a hashed principal, 128 bits in hex.
+    const PRINCIPAL_LEN: usize = 32;
+    /// Separates a principal from the key it owns. Only [`Self::with_principal`] writes it,
+    /// since no key and no scope may contain it.
+    const PRINCIPAL_SEPARATOR: char = ':';
     /// Separates a key from its scope, and is reserved in the same way.
     pub(crate) const SCOPE_SEPARATOR: char = '/';
 
@@ -55,6 +63,52 @@ impl IdempotencyKey {
     /// Returns a string slice of the idempotency key
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Creates a key under a principal, so two principals sending the same key never share an
+    /// entry.
+    ///
+    /// The principal is hashed, so any identity works, a DID included, and it never appears in
+    /// the store. Take it from authentication, never from the request's own claims.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the principal is empty, if `value` is not a valid key, or if the
+    /// result exceeds 255 bytes, which leaves `value` 222.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use idempotent::IdempotencyKey;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let alice = IdempotencyKey::with_principal("did:web:alice.example", "offer-8f21")?;
+    /// let bob = IdempotencyKey::with_principal("did:web:bob.example", "offer-8f21")?;
+    /// assert_ne!(alice, bob);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_principal(
+        principal: impl AsRef<str>,
+        value: impl Into<String>,
+    ) -> Result<Self, Error> {
+        let principal = principal.as_ref();
+        if principal.is_empty() {
+            return Err(Error::EmptyPrincipal);
+        }
+        let Self(value) = Self::new(value)?;
+        let len = Self::PRINCIPAL_LEN + 1 + value.len();
+        if len > Self::MAX_LEN {
+            return Err(Error::KeyTooLong(len));
+        }
+
+        let digest = Sha256::digest(principal.as_bytes());
+        let hash = digest[..16]
+            .iter()
+            .fold(0u128, |acc, &byte| (acc << 8) | u128::from(byte));
+        Ok(Self(format!(
+            "{hash:032x}{}{value}",
+            Self::PRINCIPAL_SEPARATOR
+        )))
     }
 
     /// Derives a scoped child key for one sub-operation of this key.
@@ -187,5 +241,53 @@ mod tests {
         let key = IdempotencyKey::default();
         let parsed = uuid::Uuid::parse_str(key.as_str());
         expect_that!(parsed, ok(anything()));
+    }
+
+    #[gtest]
+    fn principal_is_hashed_above_the_key() {
+        let alice = IdempotencyKey::with_principal("did:web:alice.example", "cred-offer-123")
+            .expect("a DID is a principal");
+        let again = IdempotencyKey::with_principal("did:web:alice.example", "cred-offer-123")
+            .expect("a DID is a principal");
+        let bob = IdempotencyKey::with_principal("did:web:bob.example", "cred-offer-123")
+            .expect("a DID is a principal");
+
+        assert_eq!(alice, again);
+        assert_ne!(alice, bob);
+        assert!(alice.as_str().ends_with(":cred-offer-123"));
+        assert_eq!(alice.as_str().len(), 32 + 1 + "cred-offer-123".len());
+    }
+
+    #[gtest]
+    fn principal_leaves_the_key_222_bytes() {
+        let longest = IdempotencyKey::with_principal("tenant", "k".repeat(222));
+        let too_long = IdempotencyKey::with_principal("tenant", "k".repeat(223));
+
+        expect_that!(longest, ok(anything()));
+        expect_that!(too_long, err(pat!(Error::KeyTooLong(_))));
+    }
+
+    #[gtest]
+    fn empty_principal_is_rejected() {
+        let result = IdempotencyKey::with_principal("", "cred-offer-123");
+        expect_that!(result, err(pat!(Error::EmptyPrincipal)));
+    }
+
+    #[gtest]
+    fn principal_path_cannot_be_forged_from_a_key_or_a_scope() {
+        let owned = IdempotencyKey::with_principal("tenant", "cred-offer-123").expect("valid");
+        let (hash, _) = owned.as_str().split_once(':').expect("a principal path");
+
+        // Neither a client key nor a step may contain the separator a principal path uses.
+        expect_that!(
+            IdempotencyKey::new(format!("{hash}:cred-offer-123")),
+            err(pat!(Error::InvalidKey))
+        );
+        let plain = IdempotencyKey::new(hash).expect("valid key");
+        expect_that!(
+            plain.scoped(":cred-offer-123"),
+            err(pat!(Error::InvalidScope))
+        );
+        assert_ne!(plain.scoped("cred-offer-123").expect("valid scope"), owned);
     }
 }

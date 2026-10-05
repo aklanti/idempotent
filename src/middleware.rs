@@ -35,15 +35,16 @@
 //! still running. If the key is free, the response is cached under a fresh claim and returned as
 //! usual. The handler's side effect has run either way, which the layer logs at warn.
 //!
-//! # Keys and scope
+//! # Keys and principals
 //!
 //! The cached response goes to whoever presents the key with the same fingerprint, so keys must
-//! be unguessable, UUID v4 or better. A service with more than one client scopes them by the
-//! caller with [`IdempotencyLayer::scope`]. Without that, one client can collect another's
-//! response by observing a key. The scope is stored as a hash, never as the identifier itself.
-//! [`stored_key`] computes the key the store holds. That is the key to
-//! [`purge`](crate::IdempotencyStore::purge) when a cached failure must go before its lease
-//! ends.
+//! be unguessable, UUID v4 or better. A service with more than one client puts each key under
+//! its principal with [`IdempotencyLayer::principal`]. Without that, one client can collect
+//! another's response by observing a key, so the layer makes you choose before it wraps a
+//! service. The principal is stored as a hash, never as the identifier itself.
+//! [`IdempotencyKey::with_principal`](crate::IdempotencyKey::with_principal) computes the key
+//! the store holds. That is the key to [`purge`](crate::IdempotencyStore::purge) when a cached
+//! failure must go before its lease ends.
 //!
 //! # Operating it
 //!
@@ -79,8 +80,10 @@ pub use self::layer::IdempotencyLayer;
 #[doc(inline)]
 pub use self::layer::IdempotencyService;
 #[doc(inline)]
-pub use self::layer::ResponseFuture;
+pub use self::layer::PrincipalSet;
 #[doc(inline)]
-pub use self::layer::stored_key;
+pub use self::layer::PrincipalUnset;
+#[doc(inline)]
+pub use self::layer::ResponseFuture;
 #[doc(inline)]
 pub use self::rejection::IdempotencyRejection;

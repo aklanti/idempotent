@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking changes
+
+- Require a principal decision on `IdempotencyLayer`: it wraps a service only after `principal`, which replaces `scope`, or `without_principal`, which declares a single client
+- Replace `middleware::stored_key` with `IdempotencyKey::with_principal` in the core crate, which rejects an empty principal with `Error::EmptyPrincipal`
+- Separate a principal from its key with `:` instead of `/`, so a principal path cannot be built from a client key or a scope; entries cached under a scope before the upgrade expire unused
+- Rename `IdempotencyRejection::MissingScope` to `MissingPrincipal`, and its code from `missing-scope` to `missing-principal`
+- Make `sha2` a dependency of the core crate
+
 ## [2.0.0](https://github.com/aklanti/idempotent/compare/v1.1.0...v2.0.0) - 2026-09-16
 
 ### Breaking changes

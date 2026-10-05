@@ -1,6 +1,7 @@
 //! The HTTP idempotency middleware.
 
 use std::fmt;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -20,8 +21,6 @@ use http_body::Body;
 use http_body_util::BodyExt;
 use http_body_util::LengthLimitError;
 use http_body_util::Limited;
-use sha2::Digest;
-use sha2::Sha256;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -32,7 +31,6 @@ use tower::Service;
 use super::rejection::IdempotencyRejection;
 use crate::CachedResponse;
 use crate::ClaimOutcome;
-use crate::Error;
 use crate::FencedOutcome;
 use crate::IdempotencyEntry;
 use crate::IdempotencyKey;
@@ -61,8 +59,8 @@ const DEFAULT_MAX_BODY_SIZE: usize = 1 << 20;
 const DEFAULT_STORE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(10 * 60);
 
-/// A hook that identifies the caller from a request without its body.
-type ScopeHook = dyn Fn(&Parts) -> Option<String> + Send + Sync;
+/// A hook that finds the principal of a request without its body.
+type PrincipalHook = dyn Fn(&Parts) -> Option<String> + Send + Sync;
 
 /// The settings shared by the layer and every service built from it.
 #[derive(Clone)]
@@ -74,7 +72,7 @@ struct Settings<S> {
     strategy: Arc<dyn FingerprintStrategy>,
     max_body_size: usize,
     require_key: bool,
-    scope: Option<Arc<ScopeHook>>,
+    principal: Option<Arc<PrincipalHook>>,
     keep_alive: Duration,
     tracker: TaskTracker,
     max_in_flight: Arc<Semaphore>,
@@ -98,19 +96,20 @@ impl<S> Settings<S> {
             .map_err(IdempotencyRejection::InvalidKey)
     }
 
-    /// Puts the key under the caller's scope when a hook is set.
-    fn scoped_key(
+    /// Puts the key under the request's principal when a hook is set.
+    fn principal_key(
         &self,
         parts: &Parts,
         key: IdempotencyKey,
     ) -> Result<IdempotencyKey, IdempotencyRejection> {
-        let Some(hook) = &self.scope else {
+        let Some(hook) = &self.principal else {
             return Ok(key);
         };
-        let scope = hook(parts)
-            .filter(|scope| !scope.is_empty())
-            .ok_or(IdempotencyRejection::MissingScope)?;
-        stored_key(&scope, &key).map_err(IdempotencyRejection::InvalidKey)
+        let principal = hook(parts)
+            .filter(|principal| !principal.is_empty())
+            .ok_or(IdempotencyRejection::MissingPrincipal)?;
+        IdempotencyKey::with_principal(principal, key.as_str())
+            .map_err(IdempotencyRejection::InvalidKey)
     }
 
     /// Admits a request under the cap on requests in flight, or rejects it as overloaded.
@@ -134,7 +133,7 @@ impl<S> Settings<S> {
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let layer = IdempotencyLayer::new(MemoryStore::builder().try_build()?)
-///     .scope(|parts| {
+///     .principal(|parts| {
 ///         parts
 ///             .headers
 ///             .get("x-tenant")
@@ -151,12 +150,24 @@ impl<S> Settings<S> {
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct IdempotencyLayer<S> {
+pub struct IdempotencyLayer<S, State = PrincipalUnset> {
     settings: Settings<S>,
+    state: PhantomData<State>,
 }
 
-impl<S> IdempotencyLayer<S> {
+/// The state of a layer that has not said where its principals come from.
+#[derive(Debug, Clone, Copy)]
+pub struct PrincipalUnset;
+
+/// The state of a layer that has, and can wrap a service.
+#[derive(Debug, Clone, Copy)]
+pub struct PrincipalSet;
+
+impl<S> IdempotencyLayer<S, PrincipalUnset> {
     /// Creates a layer over `store` with the default settings.
+    ///
+    /// The layer wraps a service once [`principal`](Self::principal) or
+    /// [`without_principal`](Self::without_principal) has been called.
     pub fn new(store: S) -> Self {
         Self {
             settings: Settings {
@@ -170,14 +181,49 @@ impl<S> IdempotencyLayer<S> {
                 strategy: Arc::new(DefaultFingerprintStrategy),
                 max_body_size: DEFAULT_MAX_BODY_SIZE,
                 require_key: false,
-                scope: None,
+                principal: None,
                 keep_alive: DEFAULT_KEEP_ALIVE,
                 tracker: TaskTracker::new(),
                 max_in_flight: Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
             },
+            state: PhantomData,
         }
     }
 
+    /// Puts every key under the principal that `hook` finds in the request.
+    ///
+    /// The hook sees the request without its body and returns the principal, such as a tenant
+    /// id that an authentication layer put in the extensions. Two principals sending the same
+    /// key then never share an entry.
+    ///
+    /// [`IdempotencyKey::with_principal`] builds the key the store holds, which leaves the
+    /// client 222 bytes. A hook that returns nothing, or an empty string, rejects the request
+    /// with 400.
+    pub fn principal<F>(self, hook: F) -> IdempotencyLayer<S, PrincipalSet>
+    where
+        F: Fn(&Parts) -> Option<String> + Send + Sync + 'static,
+    {
+        let mut settings = self.settings;
+        settings.principal = Some(Arc::new(hook));
+        IdempotencyLayer {
+            settings,
+            state: PhantomData,
+        }
+    }
+
+    /// Declares that every request comes from one client, so keys are shared by design.
+    ///
+    /// Anyone who presents a key with the same request gets the cached response. A service
+    /// with more than one client calls [`principal`](Self::principal) instead.
+    pub fn without_principal(self) -> IdempotencyLayer<S, PrincipalSet> {
+        IdempotencyLayer {
+            settings: self.settings,
+            state: PhantomData,
+        }
+    }
+}
+
+impl<S, State> IdempotencyLayer<S, State> {
     /// Reads the key from `header` instead of the idempotency-key header.
     pub fn header(mut self, header: HeaderName) -> Self {
         self.settings.header = header;
@@ -228,24 +274,6 @@ impl<S> IdempotencyLayer<S> {
         self
     }
 
-    /// Scopes every key to the caller that `hook` finds in the request.
-    ///
-    /// The hook sees the request without its body and returns the caller's identity, such as a
-    /// tenant id that an authentication layer put in the extensions. Without a scope, anyone who
-    /// presents a key with the same request gets the cached response. A service with more than
-    /// one client needs a scope.
-    ///
-    /// [`stored_key`] builds the key the store holds from the scope and the client's key, which
-    /// leaves the client 222 bytes. A hook that returns nothing, or an empty string, rejects the
-    /// request with 400.
-    pub fn scope<F>(mut self, hook: F) -> Self
-    where
-        F: Fn(&Parts) -> Option<String> + Send + Sync + 'static,
-    {
-        self.settings.scope = Some(Arc::new(hook));
-        self
-    }
-
     /// Bounds every store call the layer makes, the touches of the lease renewal included.
     ///
     /// Five seconds by default. A call that times out is a store error. Before the handler
@@ -289,7 +317,7 @@ impl<S> IdempotencyLayer<S> {
     }
 }
 
-impl<S> fmt::Debug for IdempotencyLayer<S> {
+impl<S, State> fmt::Debug for IdempotencyLayer<S, State> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IdempotencyLayer")
             .field("header", &self.settings.header)
@@ -297,14 +325,14 @@ impl<S> fmt::Debug for IdempotencyLayer<S> {
             .field("completed_ttl", &self.settings.completed_ttl)
             .field("max_body_size", &self.settings.max_body_size)
             .field("require_key", &self.settings.require_key)
-            .field("scoped", &self.settings.scope.is_some())
+            .field("principal", &self.settings.principal.is_some())
             .field("store_timeout", &self.settings.store.timeout)
             .field("keep_alive", &self.settings.keep_alive)
             .finish_non_exhaustive()
     }
 }
 
-impl<S: Clone, Inner> Layer<Inner> for IdempotencyLayer<S> {
+impl<S: Clone, Inner> Layer<Inner> for IdempotencyLayer<S, PrincipalSet> {
     type Service = IdempotencyService<S, Inner>;
 
     fn layer(&self, inner: Inner) -> Self::Service {
@@ -377,7 +405,7 @@ where
             }
         };
         let (parts, body) = request.into_parts();
-        let key = match self.settings.scoped_key(&parts, key) {
+        let key = match self.settings.principal_key(&parts, key) {
             Ok(key) => key,
             Err(rejection) => {
                 #[cfg(feature = "tracing")]
@@ -765,19 +793,6 @@ impl<S: IdempotencyStore> IdempotencyStore for TimeoutStore<S> {
     }
 }
 
-/// Returns the key the layer stores for a client's `key` when `scope` identifies the caller.
-///
-/// # Errors
-///
-/// Returns an error if the stored key exceeds 255 bytes.
-pub fn stored_key(scope: &str, key: &IdempotencyKey) -> Result<IdempotencyKey, Error> {
-    let digest = Sha256::digest(scope.as_bytes());
-    let truncated = digest[..16]
-        .iter()
-        .fold(0u128, |acc, &byte| (acc << 8) | u128::from(byte));
-    IdempotencyKey::new(format!("{truncated:032x}"))?.scoped(key.as_str())
-}
-
 /// The keep-alive header, which the http crate has no constant for.
 const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 
@@ -845,26 +860,6 @@ mod tests {
     use http_body_util::Full;
 
     use super::*;
-
-    #[test]
-    fn stored_key_hashes_the_scope() {
-        let key = IdempotencyKey::new("cred-offer-123").expect("valid key");
-        let alice = stored_key("did:web:alice.example", &key).expect("a DID scopes");
-        let again = stored_key("did:web:alice.example", &key).expect("a DID scopes");
-        let bob = stored_key("did:web:bob.example", &key).expect("a DID scopes");
-        assert_eq!(alice, again);
-        assert_ne!(alice, bob);
-        assert!(alice.as_str().ends_with("/cred-offer-123"));
-        assert_eq!(alice.as_str().len(), 32 + 1 + "cred-offer-123".len());
-
-        let longest = IdempotencyKey::new("k".repeat(222)).expect("valid key");
-        assert!(stored_key("tenant", &longest).is_ok());
-        let too_long = IdempotencyKey::new("k".repeat(223)).expect("valid key");
-        assert!(matches!(
-            stored_key("tenant", &too_long),
-            Err(Error::KeyTooLong(_))
-        ));
-    }
 
     #[test]
     fn storable_headers_drop_connection_headers_and_date() {
@@ -1159,7 +1154,9 @@ mod service_tests {
     #[tokio::test]
     async fn request_without_key_is_forwarded_untouched() {
         let handler = Handler::echoing();
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
 
         let Ok(response) = service.oneshot(post(None, "payload")).await;
 
@@ -1173,6 +1170,7 @@ mod service_tests {
     async fn request_without_key_is_rejected_when_keys_are_required() {
         let handler = Handler::answering(StatusCode::OK, "done");
         let service = IdempotencyLayer::new(store())
+            .without_principal()
             .require_key(true)
             .layer(handler.clone());
 
@@ -1186,7 +1184,9 @@ mod service_tests {
     #[tokio::test]
     async fn safe_method_ignores_key() {
         let handler = Handler::answering(StatusCode::OK, "listed");
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
         let request = || {
             Request::get("/credentials")
                 .header(DEFAULT_HEADER, KEY)
@@ -1205,7 +1205,9 @@ mod service_tests {
     #[tokio::test]
     async fn malformed_key_is_rejected_before_handler_runs() {
         let handler = Handler::answering(StatusCode::OK, "done");
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
 
         let Ok(response) = service.oneshot(post(Some("bad/key"), "{}")).await;
 
@@ -1215,11 +1217,11 @@ mod service_tests {
     }
 
     #[tokio::test]
-    async fn scoped_keys_do_not_collide_across_principals() {
+    async fn keys_do_not_collide_across_principals() {
         let store = store();
         let handler = Handler::answering(StatusCode::CREATED, "issued");
         let service = IdempotencyLayer::new(store.clone())
-            .scope(|parts| {
+            .principal(|parts| {
                 parts
                     .headers
                     .get("x-caller")
@@ -1248,11 +1250,12 @@ mod service_tests {
         assert_eq!(alice.status(), StatusCode::CREATED);
         assert_eq!(bob.status(), StatusCode::CREATED);
         assert!(!replayed(&bob));
-        assert_eq!(rejection(&anonymous), Some("missing-scope"));
+        assert_eq!(rejection(&anonymous), Some("missing-principal"));
         assert_eq!(handler.runs(), 2);
 
         let key = IdempotencyKey::new(KEY).expect("valid key");
-        let stored = stored_key("did:web:alice.example", &key).expect("a DID scopes");
+        let stored = IdempotencyKey::with_principal("did:web:alice.example", key.as_str())
+            .expect("a DID is a principal");
         let fingerprint = DefaultFingerprintStrategy.compute(&"POST /credentials".into(), b"{}");
         let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(1));
         assert!(matches!(
@@ -1264,7 +1267,9 @@ mod service_tests {
     #[tokio::test]
     async fn request_with_key_reaches_handler_with_body_intact() {
         let handler = Handler::echoing();
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
 
         let Ok(response) = service.oneshot(post(Some(KEY), "payload")).await;
 
@@ -1277,6 +1282,7 @@ mod service_tests {
     async fn request_body_over_cap_is_rejected() {
         let handler = Handler::echoing();
         let service = IdempotencyLayer::new(store())
+            .without_principal()
             .max_body_size(4)
             .layer(handler.clone());
 
@@ -1290,7 +1296,9 @@ mod service_tests {
     #[tokio::test]
     async fn request_body_failure_is_client_error() {
         let handler = Handler::echoing();
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
         let request = Request::post("/credentials")
             .header(DEFAULT_HEADER, KEY)
             .body(TestBody::Failing)
@@ -1308,7 +1316,9 @@ mod service_tests {
         let started = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         let handler = Handler::gated(&started, &release);
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
 
         let first = tokio::spawn(service.clone().oneshot(post(Some(KEY), "{}")));
         started.notified().await;
@@ -1335,6 +1345,7 @@ mod service_tests {
                 .expect("valid response")
         });
         let service = IdempotencyLayer::new(store())
+            .without_principal()
             .header(HeaderName::from_static("x-request-id"))
             .layer(handler.clone());
         let request = || {
@@ -1367,7 +1378,9 @@ mod service_tests {
     #[tokio::test]
     async fn key_reused_with_different_body_is_rejected() {
         let handler = Handler::answering(StatusCode::CREATED, "issued");
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
 
         let Ok(_first) = service
             .clone()
@@ -1383,7 +1396,9 @@ mod service_tests {
     #[tokio::test]
     async fn failed_response_is_cached_and_replayed() {
         let handler = Handler::answering(StatusCode::INTERNAL_SERVER_ERROR, "signer down");
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
 
         let Ok(first) = service.clone().oneshot(post(Some(KEY), "{}")).await;
         let Ok(second) = service.oneshot(post(Some(KEY), "{}")).await;
@@ -1404,7 +1419,9 @@ mod service_tests {
                 .body(TestBody::from("invalid offer"))
                 .expect("valid response")
         });
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
 
         let Ok(first) = service.clone().oneshot(post(Some(KEY), "{}")).await;
         let Ok(second) = service.oneshot(post(Some(KEY), "{}")).await;
@@ -1419,6 +1436,7 @@ mod service_tests {
     async fn response_over_cache_cap_is_returned_and_keeps_claim() {
         let handler = Handler::answering(StatusCode::OK, "1234567");
         let service = IdempotencyLayer::new(store())
+            .without_principal()
             .max_body_size(4)
             .layer(handler.clone());
 
@@ -1434,7 +1452,9 @@ mod service_tests {
     #[tokio::test]
     async fn response_body_failure_is_server_error_and_keeps_claim() {
         let handler = Handler::new(|_| async { Response::new(TestBody::Failing) });
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
 
         let Ok(first) = service.clone().oneshot(post(Some(KEY), "{}")).await;
         let Ok(second) = service.oneshot(post(Some(KEY), "{}")).await;
@@ -1450,7 +1470,9 @@ mod service_tests {
         let started = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         let handler = Handler::gated(&started, &release);
-        let service = IdempotencyLayer::new(store()).layer(handler.clone());
+        let service = IdempotencyLayer::new(store())
+            .without_principal()
+            .layer(handler.clone());
 
         let client = tokio::spawn(service.clone().oneshot(post(Some(KEY), "{}")));
         started.notified().await;
@@ -1476,6 +1498,7 @@ mod service_tests {
             text(StatusCode::CREATED, "issued")
         });
         let service = IdempotencyLayer::new(store())
+            .without_principal()
             .processing_ttl(Duration::from_secs(1))
             .layer(handler.clone());
 
@@ -1494,6 +1517,7 @@ mod service_tests {
             text(StatusCode::CREATED, "issued")
         });
         let service = IdempotencyLayer::new(store())
+            .without_principal()
             .processing_ttl(Duration::from_secs(1))
             .keep_alive(Duration::from_secs(2))
             .layer(handler.clone());
@@ -1517,10 +1541,13 @@ mod service_tests {
         let quick = Handler::answering(StatusCode::CREATED, "winner");
         let store = store();
         let slow_service = IdempotencyLayer::new(store.clone())
+            .without_principal()
             .processing_ttl(Duration::from_secs(1))
             .keep_alive(Duration::ZERO)
             .layer(slow.clone());
-        let quick_service = IdempotencyLayer::new(store).layer(quick.clone());
+        let quick_service = IdempotencyLayer::new(store)
+            .without_principal()
+            .layer(quick.clone());
 
         let first = tokio::spawn(slow_service.oneshot(post(Some(KEY), "{}")));
         started.notified().await;
@@ -1545,6 +1572,7 @@ mod service_tests {
         store.hang_claims.store(true, Ordering::SeqCst);
         let handler = Handler::answering(StatusCode::OK, "done");
         let service = IdempotencyLayer::new(store)
+            .without_principal()
             .store_timeout(Duration::from_secs(1))
             .layer(handler.clone());
 
@@ -1561,7 +1589,9 @@ mod service_tests {
         let store = SwitchedStore::new();
         store.fail_completions.store(true, Ordering::SeqCst);
         let handler = Handler::answering(StatusCode::CREATED, "issued");
-        let service = IdempotencyLayer::new(store).layer(handler.clone());
+        let service = IdempotencyLayer::new(store)
+            .without_principal()
+            .layer(handler.clone());
 
         let Ok(first) = service.clone().oneshot(post(Some(KEY), "{}")).await;
         let Ok(second) = service.oneshot(post(Some(KEY), "{}")).await;
@@ -1578,6 +1608,7 @@ mod service_tests {
         let release = Arc::new(Notify::new());
         let handler = Handler::gated(&started, &release);
         let service = IdempotencyLayer::new(store())
+            .without_principal()
             .max_in_flight(1)
             .layer(handler.clone());
 
@@ -1604,7 +1635,7 @@ mod service_tests {
     async fn tracker_waits_for_detached_work() {
         let started = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        let layer = IdempotencyLayer::new(store());
+        let layer = IdempotencyLayer::new(store()).without_principal();
         let service = layer.layer(Handler::gated(&started, &release));
 
         let client = tokio::spawn(service.oneshot(post(Some(KEY), "{}")));

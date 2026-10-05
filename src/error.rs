@@ -1,4 +1,4 @@
-//! Errors from validating an idempotency key or a scope.
+//! Errors from validating an idempotency key, a principal, or a scope.
 
 /// The error returned by fallible idempotency operations.
 #[non_exhaustive]
@@ -7,6 +7,10 @@ pub enum Error {
     /// The key is empty.
     #[error("idempotency key cannot be empty")]
     EmptyKey,
+
+    /// The principal a key is created under is empty.
+    #[error("principal cannot be empty")]
+    EmptyPrincipal,
 
     /// A derived-key scope segment is empty.
     #[error("scope segment cannot be empty")]

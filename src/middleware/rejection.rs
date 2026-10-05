@@ -16,8 +16,8 @@ pub enum IdempotencyRejection {
     InvalidKey(Error),
     /// No idempotency key was present on a request that requires one.
     MissingKey,
-    /// A scope hook is set and returned nothing for the request.
-    MissingScope,
+    /// A principal hook is set and returned nothing for the request.
+    MissingPrincipal,
     /// The request body failed while it was being read.
     RequestBodyFailed,
     /// The key was already used with a different request.
@@ -42,7 +42,7 @@ impl IdempotencyRejection {
         match self {
             Self::InvalidKey(_)
             | Self::MissingKey
-            | Self::MissingScope
+            | Self::MissingPrincipal
             | Self::RequestBodyFailed
             | Self::FingerprintMismatch => StatusCode::BAD_REQUEST,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -57,7 +57,7 @@ impl IdempotencyRejection {
         match self {
             Self::InvalidKey(_) => "invalid-key",
             Self::MissingKey => "missing-key",
-            Self::MissingScope => "missing-scope",
+            Self::MissingPrincipal => "missing-principal",
             Self::RequestBodyFailed => "request-body-failed",
             Self::FingerprintMismatch => "fingerprint-mismatch",
             Self::BodyTooLarge => "body-too-large",
@@ -83,7 +83,9 @@ impl IdempotencyRejection {
         let message = match &self {
             Self::InvalidKey(error) => error.to_string(),
             Self::MissingKey => "this endpoint requires an idempotency key".to_owned(),
-            Self::MissingScope => "the idempotency key cannot be scoped to a caller".to_owned(),
+            Self::MissingPrincipal => {
+                "this request has no principal to put the idempotency key under".to_owned()
+            }
             Self::RequestBodyFailed => "the request body could not be read".to_owned(),
             Self::FingerprintMismatch => {
                 "this idempotency key was already used with a different request".to_owned()
@@ -139,9 +141,9 @@ mod tests {
                 None,
             ),
             (
-                IdempotencyRejection::MissingScope,
+                IdempotencyRejection::MissingPrincipal,
                 StatusCode::BAD_REQUEST,
-                "missing-scope",
+                "missing-principal",
                 None,
             ),
             (

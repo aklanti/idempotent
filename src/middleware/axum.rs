@@ -54,7 +54,6 @@ mod tests {
 
     use super::*;
     use crate::middleware::IdempotencyLayer;
-    use crate::middleware::stored_key;
     use crate::store::memory::MemoryStore;
 
     fn store() -> MemoryStore {
@@ -90,7 +89,7 @@ mod tests {
         };
         let router = Router::new()
             .route("/credentials", post(handler))
-            .layer(IdempotencyLayer::new(store()));
+            .layer(IdempotencyLayer::new(store()).without_principal());
 
         let Ok(first) = router
             .clone()
@@ -113,7 +112,7 @@ mod tests {
                 "/credentials",
                 post(|key: IdempotencyKey| async move { key.to_string() }),
             )
-            .layer(IdempotencyLayer::new(store()).scope(|parts| {
+            .layer(IdempotencyLayer::new(store()).principal(|parts| {
                 parts
                     .headers
                     .get("x-caller")
@@ -129,7 +128,8 @@ mod tests {
         let Ok(response) = router.oneshot(request).await;
 
         let key = IdempotencyKey::new("cred-offer-123").expect("valid key");
-        let expected = stored_key("did:web:alice.example", &key).expect("a DID scopes");
+        let expected = IdempotencyKey::with_principal("did:web:alice.example", key.as_str())
+            .expect("a DID is a principal");
         assert_eq!(&body(response).await[..], expected.as_str().as_bytes());
     }
 

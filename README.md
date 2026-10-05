@@ -254,7 +254,7 @@ async fn issue(key: IdempotencyKey) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let layer = IdempotencyLayer::new(MemoryStore::builder().try_build()?).scope(|parts| {
+    let layer = IdempotencyLayer::new(MemoryStore::builder().try_build()?).principal(|parts| {
         parts
             .headers
             .get("x-tenant")
@@ -271,7 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Scope every key by the caller in a service with more than one client, or one client can replay another's response. Everything the handler returns is cached, failures included. A handler that rejected a request before doing anything marks its response `cache-control: no-store`, and the layer frees the key. A handler that outlives its lease can lose the key to another request. It then sends that request's cached response, or 409 while it is still running, rather than its own. The [middleware module docs][url-middleware] cover capacity, limits, and shutdown.
+The layer does not wrap a service until you say where principals come from. `principal` puts every key under the caller a hook finds, so one client cannot replay another's response, and `without_principal` declares a single client. Outside the layer, `IdempotencyKey::with_principal` builds the same key. Everything the handler returns is cached, failures included. A handler that rejected a request before doing anything marks its response `cache-control: no-store`, and the layer frees the key. A handler that outlives its lease can lose the key to another request. It then sends that request's cached response, or 409 while it is still running, rather than its own. The [middleware module docs][url-middleware] cover capacity, limits, and shutdown.
 
 ## Optional features
 
