@@ -88,7 +88,7 @@ impl MemoryStore {
         rx.await.map_err(|_| MemoryStoreError::TaskStopped)
     }
 
-    /// Returns `true` when the store holds no entries.
+    /// Returns `true` when the store has no entries.
     ///
     /// # Errors
     ///

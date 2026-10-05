@@ -30,7 +30,7 @@ pub enum IdempotencyRejection {
     ResponseBodyFailed,
     /// The cap on requests in flight is reached.
     Overloaded,
-    /// The store could not be reached, or did not answer in time.
+    /// The store could not be reached, or did not respond in time.
     StoreError,
     /// The runtime shut down before the handler finished.
     Shutdown,

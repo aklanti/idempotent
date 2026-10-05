@@ -200,7 +200,7 @@ struct StoreRecord {
 }
 
 impl StoreRecord {
-    /// Whether a record has expired
+    /// Returns `true` if the record has expired.
     fn is_expired(&self) -> bool {
         self.created_at.elapsed() >= self.ttl
     }

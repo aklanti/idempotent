@@ -38,9 +38,9 @@ impl IdempotencyEntry<Processing> {
 
     /// Completes this entry, consuming it and returning a `Completed` entry.
     ///
-    /// The completed entry has `completed_ttl` as its replay lease.
+    /// The completed entry's replay lease is the given TTL.
     ///
-    /// # Examples:
+    /// # Examples
     ///
     /// ```
     /// # use std::time::Duration;
@@ -101,10 +101,10 @@ impl CachedResponse {
     }
 }
 
-/// What a side effect produces and how it is cached.
+/// A value a side effect produces that can be cached as a response.
 ///
 /// A [`CachedResponse`] is cached as it stands. [`Json`] puts any serialisable value in the
-/// response body, so a side effect can hand back its own type.
+/// response body, which lets a side effect return its own type.
 pub trait Cacheable: Sized {
     /// The error when converting to or from a cached response.
     type Error: Into<Box<dyn std::error::Error + Send + Sync>>;
@@ -178,12 +178,12 @@ pub enum ReplayOutcome {
     Replayed(CachedResponse),
     /// The same request is still being processed.
     InFlight,
-    /// A different request holds the key.
+    /// A different request already used the key.
     FingerprintMismatch,
 }
 
 impl ExistingEntry {
-    /// Answers a retry whose request has `fingerprint`.
+    /// Resolves a retry with the given fingerprint.
     ///
     /// A completed entry with the same fingerprint replays its response, a processing entry
     /// with the same fingerprint is in flight, and any other entry is a mismatch.
@@ -195,7 +195,8 @@ impl ExistingEntry {
     /// # use idempotent::{IdempotencyEntry, ReplayOutcome};
     /// # use idempotent::entry::ExistingEntry;
     /// # use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
-    /// let fingerprint = DefaultFingerprintStrategy.compute(&"POST /issue_credential".into(), b"{}");
+    /// let fingerprint =
+    ///     DefaultFingerprintStrategy.compute(&"POST /issue_credential".into(), b"{}");
     /// let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
     ///
     /// let existing = ExistingEntry::Processing(entry);

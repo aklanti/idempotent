@@ -85,9 +85,9 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, NoFingerprint> {
 }
 
 impl<'store, S: IdempotencyStore, State> ClaimBuilder<'store, S, State> {
-    /// Renews the processing lease while the side effect runs, for at most `ceiling`.
+    /// Renews the processing lease while the side effect runs, up to the given ceiling.
     ///
-    /// After the ceiling the lease lapses, so the next attempt can take the key. A completion
+    /// After the ceiling the lease lapses, and the next attempt can take the key. A completion
     /// that comes later still caches its response while the key is free.
     pub const fn keep_alive(mut self, ceiling: Duration) -> Self {
         self.keep_alive = Some(ceiling);
@@ -133,7 +133,7 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
     /// # Errors
     ///
     /// Returns an error if the side effect fails, or if a store operation fails. When the store
-    /// fails after the side effect ran, the error holds the response it produced.
+    /// fails after the side effect ran, the error contains the response it produced.
     pub async fn execute_or_replay<Response, F, Fut>(
         self,
         completed_ttl: Duration,
@@ -186,9 +186,9 @@ pub struct JsonClaimBuilder<'store, S: IdempotencyStore> {
 
 #[cfg(feature = "json")]
 impl<'store, S: IdempotencyStore> JsonClaimBuilder<'store, S> {
-    /// Renews the processing lease while the side effect runs, for at most `ceiling`.
+    /// Renews the processing lease while the side effect runs, up to the given ceiling.
     ///
-    /// After the ceiling the lease lapses, so the next attempt can take the key.
+    /// After the ceiling the lease lapses, and the next attempt can take the key.
     pub const fn keep_alive(self, ceiling: Duration) -> Self {
         Self {
             claim: self.claim.keep_alive(ceiling),
@@ -203,7 +203,7 @@ impl<'store, S: IdempotencyStore> JsonClaimBuilder<'store, S> {
     /// # Errors
     ///
     /// Returns an error if the side effect fails, or if a store operation fails. When the store
-    /// fails after the side effect ran, the error holds the response it produced.
+    /// fails after the side effect ran, the error contains the response it produced.
     pub async fn execute_or_replay<T, F, Fut>(
         self,
         completed_ttl: Duration,
@@ -230,14 +230,18 @@ impl<'store, S: IdempotencyStore> JsonClaimBuilder<'store, S> {
 ///
 /// ```
 /// # use std::time::Duration;
-/// # use idempotent::{CachedResponse, ExecutionOutcome, IdempotencyKey, IdempotencyStore, Metadata};
+/// # use idempotent::CachedResponse;
+/// # use idempotent::ExecutionOutcome;
+/// # use idempotent::IdempotencyKey;
+/// # use idempotent::IdempotencyStore;
+/// # use idempotent::Metadata;
 /// # use idempotent::memory::MemoryStore;
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let store = MemoryStore::builder().try_build()?;
 /// let key = IdempotencyKey::new("offer-8f21")?;
 ///
-/// // The future owns its store and key, so it can run on another task.
+/// // The future owns its store and key and can run on another task.
 /// let outcome = tokio::spawn(
 ///     store
 ///         .claim_owned(key, Duration::from_secs(30))
@@ -298,9 +302,9 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, NoFingerprint> {
 }
 
 impl<S: IdempotencyStore + Clone, State> OwnedClaimBuilder<S, State> {
-    /// Renews the processing lease while the side effect runs, for at most `ceiling`.
+    /// Renews the processing lease while the side effect runs, up to the given ceiling.
     ///
-    /// After the ceiling the lease lapses, so the next attempt can take the key. A completion
+    /// After the ceiling the lease lapses, and the next attempt can take the key. A completion
     /// that comes later still caches its response while the key is free.
     pub const fn keep_alive(mut self, ceiling: Duration) -> Self {
         self.keep_alive = Some(ceiling);
@@ -348,7 +352,7 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, WithFingerprint> {
     /// # Errors
     ///
     /// Returns an error if the side effect fails, or if a store operation fails. When the store
-    /// fails after the side effect ran, the error holds the response it produced.
+    /// fails after the side effect ran, the error contains the response it produced.
     ///
     /// # Panics
     ///
@@ -415,9 +419,9 @@ pub struct OwnedJsonClaimBuilder<S: IdempotencyStore + Clone> {
 
 #[cfg(feature = "json")]
 impl<S: IdempotencyStore + Clone> OwnedJsonClaimBuilder<S> {
-    /// Renews the processing lease while the side effect runs, for at most `ceiling`.
+    /// Renews the processing lease while the side effect runs, up to the given ceiling.
     ///
-    /// After the ceiling the lease lapses, so the next attempt can take the key.
+    /// After the ceiling the lease lapses, and the next attempt can take the key.
     pub fn keep_alive(self, ceiling: Duration) -> Self {
         Self {
             claim: self.claim.keep_alive(ceiling),
@@ -433,7 +437,7 @@ impl<S: IdempotencyStore + Clone> OwnedJsonClaimBuilder<S> {
     /// # Errors
     ///
     /// Returns an error if the side effect fails, or if a store operation fails. When the store
-    /// fails after the side effect ran, the error holds the response it produced.
+    /// fails after the side effect ran, the error contains the response it produced.
     ///
     /// # Panics
     ///
@@ -464,7 +468,7 @@ pub enum ClaimOutcome<'store, S: IdempotencyStore> {
     Claimed(ClaimGuard<'store, S>),
     /// The key is already taken.
     Exists {
-        /// The entry that holds the key.
+        /// The existing entry for the key.
         existing: ExistingEntry,
         /// This request's fingerprint, to compare with the entry's.
         fingerprint: Fingerprint,
@@ -477,7 +481,7 @@ pub enum OwnedClaimOutcome<S: IdempotencyStore + Clone> {
     Claimed(OwnedClaimGuard<S>),
     /// The key is already taken.
     Exists {
-        /// The entry that holds the key.
+        /// The existing entry for the key.
         existing: ExistingEntry,
         /// This request's fingerprint, to compare with the entry's.
         fingerprint: Fingerprint,
@@ -501,14 +505,14 @@ pub enum ExecutionOutcome<Response = CachedResponse> {
     },
     /// The cached response was replayed.
     Replayed(Response),
-    /// Another request holds the key mid-flight.
+    /// Another request with the key is still in flight.
     InFlight,
     /// A different request reused the key.
     FingerprintMismatch,
 }
 
 impl<Response> ExecutionOutcome<Response> {
-    /// Applies `f` to the response the outcome holds.
+    /// Applies a function to the outcome's response, if it has one.
     pub fn map<T>(self, f: impl FnOnce(Response) -> T) -> ExecutionOutcome<T> {
         match self {
             Self::Executed(response) => ExecutionOutcome::Executed(f(response)),
@@ -541,7 +545,7 @@ pub enum ExecutionError<StoreError> {
         /// The store error.
         #[source]
         source: StoreError,
-        /// The response the side effect produced, as it was cached.
+        /// The response the side effect produced, in its cached form.
         response: CachedResponse,
     },
     /// The payload could not be encoded for the cache, or a cached one could not be decoded.
@@ -572,7 +576,7 @@ impl<StoreError> ExecutionError<StoreError> {
     }
 }
 
-/// Maps what caching produced to the outcome the caller sees.
+/// Maps the result of caching to an execution outcome.
 fn cached_outcome<Response, StoreError>(
     cached: Result<CacheOutcome, StoreError>,
     value: Response,
@@ -591,7 +595,7 @@ fn cached_outcome<Response, StoreError>(
     }
 }
 
-/// Decodes what the key already holds into the outcome the caller sees.
+/// Decodes the key's existing entry into an execution outcome.
 fn replayed<Response: Cacheable, StoreError>(
     replay: ReplayOutcome,
 ) -> Result<ExecutionOutcome<Response>, ExecutionError<StoreError>> {

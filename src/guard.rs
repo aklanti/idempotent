@@ -41,7 +41,7 @@ impl<'a, S: IdempotencyStore> ClaimGuard<'a, S> {
 }
 
 impl<S: IdempotencyStore> ClaimGuard<'_, S> {
-    /// Borrows the claim this guard holds.
+    /// Borrows this guard's claim.
     const fn claim(&self) -> Claim<'_, S> {
         Claim {
             store: self.store,
@@ -56,7 +56,7 @@ impl<S: IdempotencyStore> ClaimGuard<'_, S> {
         self.fencing_token
     }
 
-    /// Extends the claim's lease by `ttl`, keeping it alive while the side effect runs.
+    /// Extends the claim's lease by the given TTL while the side effect runs.
     ///
     /// # Errors
     ///
@@ -65,9 +65,9 @@ impl<S: IdempotencyStore> ClaimGuard<'_, S> {
         self.claim().touch(ttl).await
     }
 
-    /// Consumes the guard and caches the response as the completed result under `completed_ttl`.
+    /// Consumes the guard and caches the response as the completed result for the given TTL.
     ///
-    /// The completed entry inherits the claim's fingerprint, so the cached response is bound
+    /// The completed entry inherits the claim's fingerprint, and the cached response is bound
     /// to the request that was claimed.
     ///
     /// The returned [`FencedOutcome`] reports whether the write applied or was rejected by the
@@ -109,7 +109,7 @@ impl<S: IdempotencyStore> ClaimGuard<'_, S> {
 /// An owned claim handle that can outlive the current stack frame.
 ///
 /// If it is dropped before [`complete`](Self::complete) or [`leave`](Self::leave) runs, a
-/// detached task frees the claim so a retry can re-run the side effect. Dropped during
+/// detached task frees the claim, and a retry can re-run the side effect. Dropped during
 /// `complete`, it leaves the claim in place, since the store may or may not have applied the
 /// write.
 ///
@@ -150,7 +150,7 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
         self.fencing_token
     }
 
-    /// Borrows the claim this guard holds.
+    /// Borrows this guard's claim.
     const fn claim(&self) -> Claim<'_, S> {
         Claim {
             store: &self.store,
@@ -160,7 +160,7 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
         }
     }
 
-    /// Extends the claim's lease by `ttl`, keeping it alive while the side effect runs.
+    /// Extends the claim's lease by the given TTL while the side effect runs.
     ///
     /// # Errors
     ///
@@ -169,9 +169,9 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
         self.claim().touch(ttl).await
     }
 
-    /// Consumes the guard and caches the response as the completed result under `completed_ttl`.
+    /// Consumes the guard and caches the response as the completed result for the given TTL.
     ///
-    /// The completed entry inherits the claim's fingerprint, so the cached response is bound
+    /// The completed entry inherits the claim's fingerprint, and the cached response is bound
     /// to the request that was claimed. The returned [`FencedOutcome`] reports whether the
     /// write applied or was rejected by the fencing token.
     ///
@@ -189,7 +189,7 @@ impl<S: IdempotencyStore + Clone> OwnedClaimGuard<S> {
 
     /// Consumes the guard and leaves the claim in place until its lease expires.
     ///
-    /// Use it when the side effect's outcome is unknown, so a retry cannot re-run it before
+    /// Use it when the side effect's outcome is unknown. A retry cannot re-run it before
     /// the lease ends.
     pub fn leave(mut self) {
         self.recover_on_drop = false;
@@ -253,10 +253,10 @@ impl<S: IdempotencyStore + Clone> Drop for OwnedClaimGuard<S> {
     }
 }
 
-/// The outcome of caching a response under a claim.
+/// The outcome of caching a response with a claim.
 #[derive(Debug)]
 pub(crate) enum CacheOutcome {
-    /// The response is cached under the key.
+    /// The response is cached for the key.
     Cached,
     /// The response is not cached, and the store's rejection says why.
     Uncached {
@@ -271,10 +271,7 @@ pub(crate) enum CacheOutcome {
     },
 }
 
-/// The claim a guard holds, with the store and the key it acts on.
-///
-/// Both guards hold the same four values and differ only in how they own them, so the store
-/// calls live here and each guard keeps what ownership adds.
+/// A guard's claim, with the store and the key it acts on.
 struct Claim<'a, S> {
     store: &'a S,
     key: &'a IdempotencyKey,
@@ -291,12 +288,12 @@ impl<S> Clone for Claim<'_, S> {
 impl<S> Copy for Claim<'_, S> {}
 
 impl<S: IdempotencyStore> Claim<'_, S> {
-    /// Extends the lease by `ttl`.
+    /// Extends the lease by the given TTL.
     async fn touch(self, ttl: Duration) -> Result<FencedOutcome, S::Error> {
         self.store.touch(self.key, self.fencing_token, ttl).await
     }
 
-    /// Caches `response` as the completed result under `completed_ttl`.
+    /// Caches the response as the completed result for the given TTL.
     async fn complete(
         self,
         response: CachedResponse,
@@ -313,11 +310,11 @@ impl<S: IdempotencyStore> Claim<'_, S> {
         renew(|ttl| self.touch(ttl), self.key, lease, ceiling).await
     }
 
-    /// Caches `response`, and claims the key again if the store rejects the write.
+    /// Caches the response, and claims the key again if the store rejects the write.
     ///
     /// A rejection means this claim was lost while the side effect ran. Claiming the key again
-    /// shows what holds it now. If the key is free, the response goes in under the new claim. If
-    /// another attempt has taken it, that attempt keeps it, and the caller finds out what a
+    /// shows its current entry. If the key is free, the response is cached with the new claim. If
+    /// another attempt has taken it, that attempt keeps it, and the outcome reports what a
     /// retry gets.
     async fn cache(
         self,

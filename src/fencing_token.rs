@@ -31,7 +31,7 @@ pub enum FencedOutcome {
 pub enum Rejection {
     /// The supplied and expected fencing tokens do not match.
     FencingMismatch,
-    /// No live claim holds the key. It expired, was removed, or this claim already completed.
+    /// The key has no active claim. It expired, was removed, or this claim already completed.
     KeyExpired,
     /// The completing request's fingerprint does not match the claimed request.
     ///

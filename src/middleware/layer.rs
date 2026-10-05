@@ -96,7 +96,7 @@ impl<S> Settings<S> {
             .map_err(IdempotencyRejection::InvalidKey)
     }
 
-    /// Puts the key under the request's principal when a hook is set.
+    /// Scopes the key to the request's principal when a hook is set.
     fn principal_key(
         &self,
         parts: &Parts,
@@ -112,7 +112,7 @@ impl<S> Settings<S> {
             .map_err(IdempotencyRejection::InvalidKey)
     }
 
-    /// Admits a request under the cap on requests in flight, or rejects it as overloaded.
+    /// Admits a request within the cap on requests in flight, or rejects it as overloaded.
     fn admit(&self) -> Result<OwnedSemaphorePermit, IdempotencyRejection> {
         Arc::clone(&self.max_in_flight)
             .try_acquire_owned()
@@ -120,7 +120,7 @@ impl<S> Settings<S> {
     }
 }
 
-/// Wraps a service so that a request with an idempotency key is handled once and replays after.
+/// A layer that handles a request with an idempotency key once and replays it after.
 ///
 /// # Examples
 ///
@@ -164,7 +164,7 @@ pub struct PrincipalUnset;
 pub struct PrincipalSet;
 
 impl<S> IdempotencyLayer<S, PrincipalUnset> {
-    /// Creates a layer over `store` with the default settings.
+    /// Creates a layer with the given store and the default settings.
     ///
     /// The layer wraps a service once [`principal`](Self::principal) or
     /// [`without_principal`](Self::without_principal) has been called.
@@ -190,13 +190,13 @@ impl<S> IdempotencyLayer<S, PrincipalUnset> {
         }
     }
 
-    /// Puts every key under the principal that `hook` finds in the request.
+    /// Scopes every key to the principal that the hook finds in the request.
     ///
     /// The hook sees the request without its body and returns the principal, such as a tenant
     /// id that an authentication layer put in the extensions. Two principals sending the same
     /// key then never share an entry.
     ///
-    /// [`IdempotencyKey::with_principal`] builds the key the store holds, which leaves the
+    /// [`IdempotencyKey::with_principal`] builds the key the store uses, which leaves the
     /// client 222 bytes. A hook that returns nothing, or an empty string, rejects the request
     /// with 400.
     pub fn principal<F>(self, hook: F) -> IdempotencyLayer<S, PrincipalSet>
@@ -224,17 +224,17 @@ impl<S> IdempotencyLayer<S, PrincipalUnset> {
 }
 
 impl<S, State> IdempotencyLayer<S, State> {
-    /// Reads the key from `header` instead of the idempotency-key header.
+    /// Reads the key from the given header instead of the idempotency-key header.
     pub fn header(mut self, header: HeaderName) -> Self {
         self.settings.header = header;
         self
     }
 
-    /// Sets the processing lease, the time a claim survives a worker that died holding it.
+    /// Sets the processing lease, the time a claim outlives a worker that died with it.
     ///
-    /// Sixty seconds by default. The lease is renewed while the handler runs, so it does not
+    /// Sixty seconds by default. The lease is renewed while the handler runs and does not
     /// bound the handler. [`keep_alive`](Self::keep_alive) does. With a zero lease every
-    /// completion is rejected, so nothing is cached.
+    /// completion is rejected and nothing is cached.
     pub const fn processing_ttl(mut self, ttl: Duration) -> Self {
         self.settings.processing_ttl = ttl;
         self
@@ -248,7 +248,7 @@ impl<S, State> IdempotencyLayer<S, State> {
         self
     }
 
-    /// Fingerprints each request with `strategy` instead of [`DefaultFingerprintStrategy`].
+    /// Fingerprints each request with the given strategy instead of [`DefaultFingerprintStrategy`].
     ///
     /// Every strategy receives the operation, which is the method, the path, and the query,
     /// and the buffered body.
@@ -287,13 +287,13 @@ impl<S, State> IdempotencyLayer<S, State> {
     ///
     /// Ten minutes by default. Past the ceiling the lease lapses. A handler that finishes later
     /// still caches its response if nothing took the key. If another request did, the client
-    /// gets what the key holds instead.
+    /// gets the key's cached response or a rejection instead.
     pub const fn keep_alive(mut self, ceiling: Duration) -> Self {
         self.settings.keep_alive = ceiling;
         self
     }
 
-    /// Caps the requests with a key running at once, answering 503 past the cap.
+    /// Caps the requests with a key running at once. Past the cap a request gets 503.
     ///
     /// No cap by default, and a cap of zero sheds every request with a key. The work for a
     /// request with a key outlives the response future, so this is the one limit that sees it.
@@ -442,7 +442,7 @@ where
 
 /// Handles a request with a key to completion, detached from the connection.
 ///
-/// The permit under the cap on requests in flight is released when the handling ends.
+/// The permit for the cap on requests in flight is released when the handling ends.
 async fn handle<S, Inner, ReqBody, ResBody>(
     settings: Arc<Settings<S>>,
     mut inner: Inner,
@@ -594,7 +594,7 @@ fn store_failed<E: std::fmt::Display>(operation: &'static str, error: &TimeoutSt
 #[cfg(not(feature = "tracing"))]
 const fn store_failed<E>(_operation: &'static str, _error: &TimeoutStoreError<E>) {}
 
-/// Sends what the key holds, a replay of its cached response or a rejection.
+/// Builds the reply for an existing key, a replay of its cached response or a rejection.
 fn replay_or_reject<B: From<Bytes>>(reply: ReplayOutcome) -> Response<B> {
     match reply {
         ReplayOutcome::Replayed(cached) => {
@@ -720,20 +720,20 @@ where
     }
 }
 
-/// A store whose calls are bounded by a timeout.
+/// A store with a timeout on every call.
 #[derive(Clone)]
 struct TimeoutStore<S> {
     store: S,
     timeout: Duration,
 }
 
-/// The error of a store call made under a timeout.
+/// The error of a store call with a timeout.
 #[derive(Debug, thiserror::Error)]
 enum TimeoutStoreError<E> {
     /// The store returned an error.
     #[error("store operation failed")]
     Store(#[source] E),
-    /// The timeout passed before the store answered.
+    /// The timeout passed before the store responded.
     #[error("store operation timed out after {0:?}")]
     Elapsed(Duration),
 }
@@ -793,7 +793,7 @@ impl<S: IdempotencyStore> IdempotencyStore for TimeoutStore<S> {
     }
 }
 
-/// The keep-alive header, which the http crate has no constant for.
+/// The keep-alive header.
 const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 
 /// Copies the headers worth replaying into [`Metadata`].
@@ -813,7 +813,7 @@ fn storable_headers(headers: &HeaderMap) -> Metadata {
         .collect()
 }
 
-/// Returns true if a header belongs to the connection rather than the response.
+/// Returns `true` if a header describes the connection rather than the response.
 fn is_connection_specific(name: &HeaderName) -> bool {
     [
         header::CONNECTION,
@@ -829,7 +829,7 @@ fn is_connection_specific(name: &HeaderName) -> bool {
     .contains(name)
 }
 
-/// The result of buffering a request body under a cap.
+/// The result of buffering a request body with a size cap.
 enum Buffered {
     /// The body fit within the cap.
     Bytes(Bytes),
@@ -837,7 +837,7 @@ enum Buffered {
     TooLarge,
 }
 
-/// Collects `body` into memory, refusing to buffer more than `max` bytes.
+/// Collects the body into memory, up to the given number of bytes.
 ///
 /// # Errors
 ///
@@ -985,12 +985,12 @@ mod service_tests {
             }
         }
 
-        /// A handler that answers `status` with `body`.
+        /// Creates a handler that returns the given status and body.
         fn answering(status: StatusCode, body: &'static str) -> Self {
             Self::new(move |_| async move { text(status, body) })
         }
 
-        /// A handler that echoes the request body.
+        /// Creates a handler that echoes the request body.
         fn echoing() -> Self {
             Self::new(|request| async move {
                 let bytes = request
@@ -1003,7 +1003,7 @@ mod service_tests {
             })
         }
 
-        /// A handler that reports when it starts and waits to be released.
+        /// Creates a handler that reports when it starts and waits to be released.
         fn gated(started: &Arc<Notify>, release: &Arc<Notify>) -> Self {
             let (started, release) = (Arc::clone(started), Arc::clone(release));
             Self::new(move |_| {
@@ -1036,7 +1036,7 @@ mod service_tests {
         }
     }
 
-    /// A memory store with two switches, one that never answers a claim and one that fails
+    /// A memory store with two switches, one that never responds to a claim and one that fails
     /// every completion.
     #[derive(Clone)]
     struct SwitchedStore {

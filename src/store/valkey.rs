@@ -3,12 +3,12 @@
 //! Claiming and completing are atomic via Lua scripts with no TOCTOU risk.
 //! The key-expiration uses native key TTL.
 //!
-//! The server must have AOF persistence enabled (`appendonly yes`) and eviction disabled,
-//! because a silent eviction under memory pressure breaks the at-most-once guarantee.
+//! The server must have AOF persistence enabled (`appendonly yes`) and eviction disabled.
+//! A silent eviction under memory pressure breaks the at-most-once guarantee.
 //! Valkey Cluster is not supported. The claim script writes the entry and the fencing-token
-//! counter, two keys in different slots, which a cluster refuses.
+//! counter, two keys in different slots, which a cluster rejects.
 //!
-//! Every fencing token holds the server's run id, so a token issued before a restart or a
+//! Every fencing token includes the server's run id. A token issued before a restart or a
 //! failover never matches one issued after it.
 
 use std::fmt;
@@ -111,7 +111,7 @@ impl ValkeyStore {
         Ok(())
     }
 
-    /// Starts building a store that connects to `url` without a key prefix.
+    /// Starts building a store that connects to the given URL without a key prefix.
     pub fn with_url(url: impl Into<String>) -> ValkeyStoreBuilder {
         ValkeyStoreBuilder {
             source: Source::Url(url.into()),
@@ -333,7 +333,7 @@ impl ValkeyStoreBuilder {
         self
     }
 
-    /// Sets how long a command may take to answer.
+    /// Sets the time a command may take to respond.
     pub const fn response_timeout(mut self, timeout: Duration) -> Self {
         self.response_timeout = timeout;
         self
@@ -430,7 +430,7 @@ mod tests {
             .expect("Valkey did not become reachable within thirty seconds")
     }
 
-    /// The stored server run id.
+    /// Returns the stored server run id.
     async fn server_run_id(store: &ValkeyStore) -> u64 {
         let info: String = redis::cmd("INFO")
             .arg("server")

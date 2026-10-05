@@ -51,7 +51,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
 
     /// Creates a builder for an owned claim.
     ///
-    /// The builder and the futures it returns own a clone of the store and the key, so they
+    /// The builder and the futures it returns own a clone of the store and the key, and
     /// can move across tasks and runtimes.
     ///
     /// # Examples
@@ -97,7 +97,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
     /// The returned [`FencedOutcome`] reports whether the write applied or was rejected, and
     /// every store reports it the same way. If another attempt replaced the token, the rejection
     /// is a fencing mismatch, whether that attempt is still running or has already finished. If
-    /// no live claim holds the key, or this claim already completed, the key has expired. If the
+    /// the key has no active claim, or this claim already completed, the key has expired. If the
     /// entry's fingerprint differs from the claimed one, the rejection is a fingerprint mismatch.
     /// A rejected completion writes nothing.
     ///
@@ -113,7 +113,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
 
     /// Removes an idempotency entry if the fencing token still owns the claim.
     ///
-    /// A matching token removes the entry, a completed one included, so a claim can drop the
+    /// A matching token removes the entry, a completed one included, and the claim can drop the
     /// response it cached. A token another attempt replaced is a fencing mismatch, and a key
     /// with no entry has expired.
     ///
@@ -126,7 +126,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
         fencing_token: FencingToken,
     ) -> impl Future<Output = Result<FencedOutcome, Self::Error>> + Send;
 
-    /// Extends the processing lease on a key by `ttl` while the fencing token matches the claim.
+    /// Extends a key's processing lease by the given TTL while the fencing token matches the claim.
     ///
     /// It reports the same outcomes as [`complete`](Self::complete). If another attempt took the
     /// key, the outcome is a fencing mismatch. If the key has already completed, it has expired.
@@ -154,7 +154,7 @@ pub trait IdempotencyStore: Send + Sync + 'static {
 pub enum InsertResult {
     /// A key is successfully claimed.
     ///
-    /// The key was absent or expired and the caller owns the claim and should
+    /// The key was absent or expired. The request owns the claim and should
     /// execute the handler.
     Claimed {
         /// A fencing token to prevent zombie completion.

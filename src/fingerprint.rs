@@ -97,7 +97,7 @@ impl From<&http::request::Parts> for Operation {
 
 /// Trait for computing request fingerprints.
 pub trait FingerprintStrategy: Send + Sync + 'static {
-    /// Computes a fingerprint from `operation` and `body`.
+    /// Computes a fingerprint from the operation and the request body.
     fn compute(&self, operation: &Operation, body: &[u8]) -> Fingerprint;
 }
 

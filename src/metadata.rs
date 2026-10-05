@@ -4,7 +4,7 @@ use bytes::Bytes;
 
 /// Response metadata as ordered name/value pairs.
 ///
-/// Names may repeat, matching HTTP headers and gRPC metadata.
+/// A name may repeat, as in HTTP headers and gRPC metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Metadata(Vec<(String, Bytes)>);
@@ -20,7 +20,7 @@ impl Metadata {
         self.0.push((name.into(), value));
     }
 
-    /// Returns the first value for `name`.
+    /// Returns the first value with the given name.
     pub fn get(&self, name: &str) -> Option<&Bytes> {
         self.0.iter().find(|(n, _)| n == name).map(|(_, v)| v)
     }

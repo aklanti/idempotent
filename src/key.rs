@@ -28,7 +28,7 @@ impl IdempotencyKey {
     ///
     /// # Errors
     ///
-    /// Returns an error if `value` is empty, exceeds 255 bytes, or contains a control character
+    /// Returns an error if the key is empty, exceeds 255 bytes, or contains a control character
     /// or a reserved separator (`:` or `/`).
     ///
     /// # Examples
@@ -65,16 +65,17 @@ impl IdempotencyKey {
         &self.0
     }
 
-    /// Creates a key under a principal, so two principals sending the same key never share an
-    /// entry.
+    /// Creates a key scoped to a principal.
+    ///
+    /// Two principals sending the same key never share an entry.
     ///
     /// The principal is hashed, so any identity works, a DID included, and it never appears in
     /// the store. Take it from authentication, never from the request's own claims.
     ///
     /// # Errors
     ///
-    /// Returns an error if the principal is empty, if `value` is not a valid key, or if the
-    /// result exceeds 255 bytes, which leaves `value` 222.
+    /// Returns an error if the principal is empty, if the key is not valid, or if the
+    /// result exceeds 255 bytes, which leaves the key 222.
     ///
     /// # Examples
     ///
@@ -130,14 +131,15 @@ impl IdempotencyKey {
         Ok(Self(derived))
     }
 
-    /// Like [`scoped`](Self::scoped) but **consumes** the key for a linear cursor advancing through
-    /// states, where the previous key should become inaccessible.
+    /// Scopes the key like [`scoped`](Self::scoped), but consumes it.
     ///
-    /// On error the key is consumed. Use [`scoped`](Self::scoped) if you need to keep the original
-    /// when validation fails.
+    /// Use it for a cursor that advances through states, where the previous key must not be
+    /// used again. On error the key is consumed. Use [`scoped`](Self::scoped) to keep the
+    /// original when validation fails.
     ///
     /// # Errors
-    /// Same as [`scoped`](Self::scoped).
+    ///
+    /// Returns an error in the same cases as [`scoped`](Self::scoped).
     pub fn into_scoped(mut self, scope: impl AsRef<str>) -> Result<Self, Error> {
         let scope = scope.as_ref();
         self.check_scope(scope)?;
@@ -162,7 +164,7 @@ impl IdempotencyKey {
         Ok(())
     }
 
-    /// A char that may not appear in a user-supplied key OR a service-name prefix.
+    /// Returns `true` if the character may not appear in a key or a service-name prefix.
     pub(crate) const fn is_reserved(c: char) -> bool {
         c.is_ascii_control() || c == Self::PREFIX_SEPARATOR || c == Self::SCOPE_SEPARATOR
     }
