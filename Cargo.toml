@@ -1,6 +1,6 @@
 [package]
 name = "idempotent"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2024"
 authors = ["Sede Soukossi"]
 description = "Type-safe idempotency keys for building reliable, retry-safe APIs"
@@ -89,8 +89,8 @@ unwrap_used = "deny"
 non_snake_case = "allow"
 trivial_numeric_casts = "warn"
 unsafe_code = "forbid"
-unused-lifetimes = "warn"
-unused-macro-rules = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
 unused_import_braces = "warn"
 unused_must_use = "deny"
 

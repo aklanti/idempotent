@@ -10,17 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking changes
 
 - Require a principal decision on `IdempotencyLayer`: it wraps a service only after `principal`, which replaces `scope`, or `without_principal`, which declares a single client
+- Add a second type parameter to `IdempotencyLayer`, `PrincipalUnset` until that decision and `PrincipalSet` after it, so code that writes the layer's type out must state it
 - Replace `middleware::stored_key` with `IdempotencyKey::with_principal` in the core crate, which rejects an empty principal with `Error::EmptyPrincipal`
 - Separate a principal from its key with `:` instead of `/`, so a principal path cannot be built from a client key or a scope; entries cached under a scope before the upgrade expire unused
 - Rename `IdempotencyRejection::MissingScope` to `MissingPrincipal`, and its code from `missing-scope` to `missing-principal`
-- Make `sha2` a dependency of the core crate
+- Hash a principal with the `aws-lc-rs` feature, on by default, or with the new `sha2` feature, where `middleware` enabled the `sha2` dependency itself; AWS-LC is used when both are on, and both produce the same key
+- Gate `IdempotencyKey::with_principal` and `IdempotencyLayer::principal` on one of those two features, so a build with default features off must enable one
 
 ## [2.0.0](https://github.com/aklanti/idempotent/compare/v1.1.0...v2.0.0) - 2026-09-16
 
 ### Breaking changes
 
 - Replace `run` with a payload: `execute_or_replay` takes any `Cacheable` side effect, `Json` caches a value as JSON, and `json()` on both builders is the same thing without the wrapper, so one verb covers both payloads and `RunError` is gone
-- Parameterise `ExecutionOutcome` over the response it holds, defaulting to `CachedResponse`, and add `map` to change it
+- Parameterize `ExecutionOutcome` over the response it holds, defaulting to `CachedResponse`, and add `map` to change it
 - Report a value claim's in flight, reuse, and supersession as outcomes rather than errors, matching the response path, where supersession is `Fenced`
 - Add `ExecutionError::Payload` for a value that cannot be encoded or decoded, and `ExecutionError::into_side_effect_error`, which takes the side effect's own error back out of the box
 - Report a fencing mismatch from `complete` and `touch` for a token another attempt replaced, including on a key that attempt already completed, where a completed key reported an expired key

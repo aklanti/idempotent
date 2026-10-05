@@ -378,29 +378,28 @@ where
     #[cfg(not(feature = "tracing"))]
     let _ = key;
     let interval = lease / 2;
-    if interval.is_zero() {
-        return std::future::pending().await;
-    }
-    let renewals = async {
-        loop {
-            tokio::time::sleep(interval).await;
-            match touch(lease).await {
-                Ok(FencedOutcome::Applied) => {}
-                Ok(FencedOutcome::Rejected(_lost)) => {
-                    #[cfg(feature = "tracing")]
-                    tracing::warn!(key = %key, rejection = ?_lost, "the processing lease was lost");
-                    return;
-                }
-                Err(_error) => {
-                    #[cfg(feature = "tracing")]
-                    tracing::warn!(key = %key, error = %_error, "failed to renew the processing lease");
+    if !interval.is_zero() {
+        let renewals = async {
+            loop {
+                tokio::time::sleep(interval).await;
+                match touch(lease).await {
+                    Ok(FencedOutcome::Applied) => {}
+                    Ok(FencedOutcome::Rejected(_lost)) => {
+                        #[cfg(feature = "tracing")]
+                        tracing::warn!(key = %key, rejection = ?_lost, "the processing lease was lost");
+                        return;
+                    }
+                    Err(_error) => {
+                        #[cfg(feature = "tracing")]
+                        tracing::warn!(key = %key, error = %_error, "failed to renew the processing lease");
+                    }
                 }
             }
+        };
+        if tokio::time::timeout(ceiling, renewals).await.is_err() {
+            #[cfg(feature = "tracing")]
+            tracing::warn!(key = %key, "keep-alive ceiling reached, the lease will lapse");
         }
-    };
-    if tokio::time::timeout(ceiling, renewals).await.is_err() {
-        #[cfg(feature = "tracing")]
-        tracing::warn!(key = %key, "keep-alive ceiling reached, the lease will lapse");
     }
     std::future::pending().await
 }

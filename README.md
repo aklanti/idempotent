@@ -283,6 +283,8 @@ The layer does not wrap a service until you say where principals come from. `pri
 - **tracing:** instruments store operations with [`tracing`][url-tracing] spans and events
 - **serde:** derives [`Serialize`][url-serde-serialize] and [`Deserialize`][url-serde-deserialize] on `IdempotencyEntry`, `CachedResponse`, `Metadata`, `Fingerprint`, and `FencingToken`
 - **uuid:** `IdempotencyKey::default()`, on by default
+- **aws-lc-rs:** hashes a principal with AWS-LC's SHA-256 for `IdempotencyKey::with_principal` and `IdempotencyLayer::principal`, on by default
+- **sha2:** the same hash from the [`sha2`][url-sha2] crate, for a build without `aws-lc-rs`; principals need one of the two
 
 ## Supported Rust versions
 
@@ -304,4 +306,5 @@ Unless otherwise noted, this project is licensed under the [Mozilla Public Licen
 [url-middleware]: https://docs.rs/idempotent/latest/idempotent/middleware/index.html
 [url-serde-serialize]: https://docs.rs/serde/1/serde/trait.Serialize.html
 [url-serde-deserialize]: https://docs.rs/serde/1/serde/trait.Deserialize.html
+[url-sha2]: https://docs.rs/sha2/latest/sha2
 [url-tracing]: https://docs.rs/tracing/latest/tracing

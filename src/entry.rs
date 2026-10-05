@@ -195,8 +195,7 @@ impl ExistingEntry {
     /// # use idempotent::{IdempotencyEntry, ReplayOutcome};
     /// # use idempotent::entry::ExistingEntry;
     /// # use idempotent::fingerprint::{DefaultFingerprintStrategy, FingerprintStrategy};
-    /// let fingerprint =
-    ///     DefaultFingerprintStrategy.compute(&"POST /issue_credential".into(), b"{}");
+    /// let fingerprint = DefaultFingerprintStrategy.compute(&"POST /issue_credential".into(), b"{}");
     /// let entry = IdempotencyEntry::new(fingerprint, Duration::from_secs(30));
     ///
     /// let existing = ExistingEntry::Processing(entry);
