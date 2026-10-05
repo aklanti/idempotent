@@ -2,9 +2,6 @@
 
 use std::fmt;
 
-use sha2::Digest;
-use sha2::Sha256;
-
 use crate::Error;
 
 /// A validated idempotency key.
@@ -16,8 +13,10 @@ impl IdempotencyKey {
     const MAX_LEN: usize = u8::MAX as usize;
     /// Separates a store prefix from a key, so keys and prefixes cannot contain it.
     const PREFIX_SEPARATOR: char = ':';
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     /// The length of a hashed principal, 128 bits in hex.
     const PRINCIPAL_LEN: usize = 32;
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     /// Separates a principal from the key it owns. Only [`Self::with_principal`] writes it,
     /// since no key and no scope may contain it.
     const PRINCIPAL_SEPARATOR: char = ':';
@@ -88,6 +87,7 @@ impl IdempotencyKey {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     pub fn with_principal(
         principal: impl AsRef<str>,
         value: impl Into<String>,
@@ -102,10 +102,7 @@ impl IdempotencyKey {
             return Err(Error::KeyTooLong(len));
         }
 
-        let digest = Sha256::digest(principal.as_bytes());
-        let hash = digest[..16]
-            .iter()
-            .fold(0u128, |acc, &byte| (acc << 8) | u128::from(byte));
+        let hash = principal_hash(principal);
         Ok(Self(format!(
             "{hash:032x}{}{value}",
             Self::PRINCIPAL_SEPARATOR
@@ -168,6 +165,30 @@ impl IdempotencyKey {
     pub(crate) const fn is_reserved(c: char) -> bool {
         c.is_ascii_control() || c == Self::PREFIX_SEPARATOR || c == Self::SCOPE_SEPARATOR
     }
+}
+
+/// Returns the first 128 bits of the principal's SHA-256 digest.
+#[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
+fn principal_hash(principal: &str) -> u128 {
+    cfg_select! {
+        feature = "aws-lc-rs" => {
+            let digest =
+                aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, principal.as_bytes());
+            leading_bits(digest.as_ref())
+        }
+        feature = "sha2" => {
+            use sha2::Digest;
+            leading_bits(&sha2::Sha256::digest(principal.as_bytes()))
+        }
+    }
+}
+
+/// Returns the first 16 bytes of a digest as a big-endian number.
+#[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
+fn leading_bits(digest: &[u8]) -> u128 {
+    digest[..16]
+        .iter()
+        .fold(0, |bits, &byte| (bits << 8) | u128::from(byte))
 }
 
 /// Reads the key from a header.
@@ -245,6 +266,7 @@ mod tests {
         expect_that!(parsed, ok(anything()));
     }
 
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     #[gtest]
     fn principal_is_hashed_above_the_key() {
         let alice = IdempotencyKey::with_principal("did:web:alice.example", "cred-offer-123")
@@ -260,6 +282,15 @@ mod tests {
         assert_eq!(alice.as_str().len(), 32 + 1 + "cred-offer-123".len());
     }
 
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
+    #[gtest]
+    fn principal_hash_is_the_same_for_every_backend() {
+        let key = IdempotencyKey::with_principal("did:web:acme.example", "offer-8f21")
+            .expect("a DID is a principal");
+        assert_eq!(key.as_str(), "73764ed6347954f003b30fbd3596df4d:offer-8f21");
+    }
+
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     #[gtest]
     fn principal_leaves_the_key_222_bytes() {
         let longest = IdempotencyKey::with_principal("tenant", "k".repeat(222));
@@ -269,12 +300,14 @@ mod tests {
         expect_that!(too_long, err(pat!(Error::KeyTooLong(_))));
     }
 
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     #[gtest]
     fn empty_principal_is_rejected() {
         let result = IdempotencyKey::with_principal("", "cred-offer-123");
         expect_that!(result, err(pat!(Error::EmptyPrincipal)));
     }
 
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     #[gtest]
     fn principal_path_cannot_be_forged_from_a_key_or_a_scope() {
         let owned = IdempotencyKey::with_principal("tenant", "cred-offer-123").expect("valid");

@@ -59,8 +59,9 @@ const DEFAULT_MAX_BODY_SIZE: usize = 1 << 20;
 const DEFAULT_STORE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(10 * 60);
 
-/// A hook that finds the principal of a request without its body.
-type PrincipalHook = dyn Fn(&Parts) -> Option<String> + Send + Sync;
+/// A hook that scopes a client's key to the principal of its request.
+type PrincipalHook =
+    dyn Fn(&Parts, IdempotencyKey) -> Result<IdempotencyKey, IdempotencyRejection> + Send + Sync;
 
 /// The settings shared by the layer and every service built from it.
 #[derive(Clone)]
@@ -102,14 +103,10 @@ impl<S> Settings<S> {
         parts: &Parts,
         key: IdempotencyKey,
     ) -> Result<IdempotencyKey, IdempotencyRejection> {
-        let Some(hook) = &self.principal else {
-            return Ok(key);
-        };
-        let principal = hook(parts)
-            .filter(|principal| !principal.is_empty())
-            .ok_or(IdempotencyRejection::MissingPrincipal)?;
-        IdempotencyKey::with_principal(principal, key.as_str())
-            .map_err(IdempotencyRejection::InvalidKey)
+        match &self.principal {
+            Some(hook) => hook(parts, key),
+            None => Ok(key),
+        }
     }
 
     /// Admits a request within the cap on requests in flight, or rejects it as overloaded.
@@ -199,12 +196,19 @@ impl<S> IdempotencyLayer<S, PrincipalUnset> {
     /// [`IdempotencyKey::with_principal`] builds the key the store uses, which leaves the
     /// client 222 bytes. A hook that returns nothing, or an empty string, rejects the request
     /// with 400.
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     pub fn principal<F>(self, hook: F) -> IdempotencyLayer<S, PrincipalSet>
     where
         F: Fn(&Parts) -> Option<String> + Send + Sync + 'static,
     {
         let mut settings = self.settings;
-        settings.principal = Some(Arc::new(hook));
+        settings.principal = Some(Arc::new(move |parts, key| {
+            let principal = hook(parts)
+                .filter(|principal| !principal.is_empty())
+                .ok_or(IdempotencyRejection::MissingPrincipal)?;
+            IdempotencyKey::with_principal(principal, key.as_str())
+                .map_err(IdempotencyRejection::InvalidKey)
+        }));
         IdempotencyLayer {
             settings,
             state: PhantomData,
@@ -1216,6 +1220,7 @@ mod service_tests {
         assert_eq!(handler.runs(), 0);
     }
 
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     #[tokio::test]
     async fn keys_do_not_collide_across_principals() {
         let store = store();

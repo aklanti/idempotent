@@ -105,6 +105,7 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 
+    #[cfg(any(feature = "aws-lc-rs", feature = "sha2"))]
     #[tokio::test]
     async fn handler_extracts_key_resolved_by_layer() {
         let router = Router::new()

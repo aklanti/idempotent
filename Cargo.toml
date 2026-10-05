@@ -11,11 +11,22 @@ keywords = ["idempotency", "idempotent", "api", "retry", "deduplication"]
 categories = ["web-programming", "data-structures"]
 
 [package.metadata.docs.rs]
-features = ["axum", "json", "memory", "middleware", "serde", "tracing", "uuid", "valkey"]
+features = [
+    "aws-lc-rs",
+    "axum",
+    "json",
+    "memory",
+    "middleware",
+    "serde",
+    "tracing",
+    "uuid",
+    "valkey",
+]
 
 [features]
+aws-lc-rs = ["dep:aws-lc-rs"]
 axum = ["dep:axum", "middleware"]
-default = ["uuid"]
+default = ["aws-lc-rs", "uuid"]
 json = ["serde", "dep:serde_json"]
 memory = []
 middleware = [
@@ -27,11 +38,13 @@ middleware = [
     "dep:tower",
 ]
 serde = ["dep:serde", "bytes/serde", "uuid?/serde"]
+sha2 = ["dep:sha2"]
 tracing = ["dep:tracing"]
 uuid = ["dep:uuid"]
 valkey = ["dep:redis", "dep:postcard", "serde"]
 
 [dependencies]
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"], optional = true }
 axum = { version = "0.8", default-features = false, optional = true }
 bytes = { version = "1" }
 http = { version = "1", optional = true }
@@ -41,7 +54,7 @@ pin-project-lite = { version = "0.2", optional = true }
 postcard = { version = "1", optional = true, features = ["alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
-sha2 = { version = "0.10" }
+sha2 = { version = "0.10", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
 tokio-util = { version = "0.7", features = ["rt"], optional = true }
