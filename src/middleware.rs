@@ -38,8 +38,8 @@
 //! # Keys and principals
 //!
 //! The cached response goes to whoever presents the key with the same fingerprint, so keys must
-//! be unguessable, UUID v4 or better. A service with more than one client puts each key under
-//! its principal with [`IdempotencyLayer::principal`]. Without that, one client can collect
+//! be unguessable, UUID v4 or better. A service with more than one client binds each key to its
+//! principal with [`IdempotencyLayer::principal`]. Without that, one client can collect
 //! another's response by observing a key, and the layer makes you choose before it wraps a
 //! service. The principal is stored as a hash, never as the identifier itself.
 //! [`IdempotencyKey::with_principal`](crate::IdempotencyKey::with_principal) computes the key

@@ -118,8 +118,8 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
 
     /// Claims the key and runs the side effect, or replays the cached response on a matching retry.
     ///
-    /// The side effect runs with the claim's fencing token, and its response is cached under
-    /// the key. A retry with the same fingerprint replays that response.
+    /// The side effect runs with the claim's fencing token, and its response is cached for the
+    /// key. A retry with the same fingerprint replays that response.
     ///
     /// With [`keep_alive`](Self::keep_alive) set, the processing lease is renewed while the side
     /// effect runs. If the claim lapsed anyway, the key is claimed again. If another attempt
@@ -130,10 +130,11 @@ impl<'store, S: IdempotencyStore> ClaimBuilder<'store, S, WithFingerprint> {
     /// [`claim_owned`](IdempotencyStore::claim_owned). A failed side effect leaves the claim to
     /// expire on both paths.
     ///
+    /// When the store fails after the side effect ran, the error contains the response it produced.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the side effect fails, or if a store operation fails. When the store
-    /// fails after the side effect ran, the error contains the response it produced.
+    /// Returns an error if the side effect fails, or if a store operation fails.
     pub async fn execute_or_replay<Response, F, Fut>(
         self,
         completed_ttl: Duration,
@@ -200,10 +201,11 @@ impl<'store, S: IdempotencyStore> JsonClaimBuilder<'store, S> {
     /// Behaves as [`ClaimBuilder::execute_or_replay`], except that the side effect returns a
     /// value rather than a response, and the value is cached as JSON.
     ///
+    /// When the store fails after the side effect ran, the error contains the response it produced.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the side effect fails, or if a store operation fails. When the store
-    /// fails after the side effect ran, the error contains the response it produced.
+    /// Returns an error if the side effect fails, or if a store operation fails.
     pub async fn execute_or_replay<T, F, Fut>(
         self,
         completed_ttl: Duration,
@@ -353,10 +355,11 @@ impl<S: IdempotencyStore + Clone> OwnedClaimBuilder<S, WithFingerprint> {
     /// With [`keep_alive`](Self::keep_alive) set, the processing lease is renewed while the side
     /// effect runs.
     ///
+    /// When the store fails after the side effect ran, the error contains the response it produced.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the side effect fails, or if a store operation fails. When the store
-    /// fails after the side effect ran, the error contains the response it produced.
+    /// Returns an error if the side effect fails, or if a store operation fails.
     ///
     /// # Panics
     ///
@@ -438,10 +441,11 @@ impl<S: IdempotencyStore + Clone> OwnedJsonClaimBuilder<S> {
     /// its store and key. It can move across tasks and runtimes, and dropping it while the side
     /// effect runs frees the claim at once.
     ///
+    /// When the store fails after the side effect ran, the error contains the response it produced.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the side effect fails, or if a store operation fails. When the store
-    /// fails after the side effect ran, the error contains the response it produced.
+    /// Returns an error if the side effect fails, or if a store operation fails.
     ///
     /// # Panics
     ///

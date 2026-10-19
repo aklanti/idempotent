@@ -540,7 +540,7 @@ mod tests {
 
     #[gtest]
     #[tokio::test]
-    async fn complete_under_contention() {
+    async fn complete_while_contended() {
         let store = Arc::new(
             MemoryStore::builder()
                 .buffer(16)

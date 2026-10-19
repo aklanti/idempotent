@@ -4,7 +4,7 @@
 //! The key-expiration uses native key TTL.
 //!
 //! The server must have AOF persistence enabled (`appendonly yes`) and eviction disabled.
-//! A silent eviction under memory pressure breaks the at-most-once guarantee.
+//! A silent eviction when memory runs short breaks the at-most-once guarantee.
 //! Valkey Cluster is not supported. The claim script writes the entry and the fencing-token
 //! counter, two keys in different slots, which a cluster rejects.
 //!
@@ -327,7 +327,7 @@ impl ValkeyStoreBuilder {
         self
     }
 
-    /// Sets how long a connection attempt may take.
+    /// Sets the time a connection attempt may take.
     pub const fn connection_timeout(mut self, timeout: Duration) -> Self {
         self.connection_timeout = timeout;
         self
@@ -346,8 +346,8 @@ impl ValkeyStoreBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error if the prefix contains a reserved separator or a control character, if
-    /// the URL cannot be parsed, or if the connection manager cannot be created.
+    /// Returns an error if the prefix has a reserved separator or control character, the URL does
+    /// not parse, or the manager cannot be created.
     pub async fn try_build(self) -> Result<ValkeyStore, ValkeyError> {
         let prefix = self.prefix.unwrap_or_default();
         if prefix.chars().any(IdempotencyKey::is_reserved) {

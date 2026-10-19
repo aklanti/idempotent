@@ -12,7 +12,7 @@ use crate::fencing_token::FencingToken;
 
 /// The command to execute on the store.background store task.
 pub enum Command {
-    /// Insertion attempt request
+    /// A request to claim a key.
     TryInsert {
         key: IdempotencyKey,
         entry: IdempotencyEntry<Processing>,
@@ -22,7 +22,7 @@ pub enum Command {
     Complete {
         key: IdempotencyKey,
         entry: IdempotencyEntry<Completed>,
-        /// A fencing token from the claimed result
+        /// A fencing token from the claimed result.
         fencing_token: FencingToken,
         reply: oneshot::Sender<FencedOutcome>,
     },

@@ -160,7 +160,7 @@ pub enum InsertResult {
         /// A fencing token to prevent zombie completion.
         fencing_token: FencingToken,
     },
-    /// A key already exists
+    /// The key already has an entry.
     Exists(ExistingEntry),
 }
 

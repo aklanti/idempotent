@@ -155,7 +155,7 @@ impl<T: Serialize + DeserializeOwned> Cacheable for Json<T> {
     }
 }
 
-/// The request is currently being processed
+/// The request is still being processed.
 ///
 /// A concurrent request with the same idempotency key will return a response
 /// that indicates a conflict.
@@ -223,7 +223,7 @@ pub struct Completed {
 
 /// Marker trait for valid entry states.
 ///
-/// This trait is sealed and cannot be implemented outside this crate
+/// This trait is sealed and cannot be implemented outside this crate.
 pub trait EntryState: sealed::Sealed {}
 
 mod sealed {
@@ -262,7 +262,7 @@ mod tests {
     }
 
     #[gtest]
-    fn replay_answers_all_three_cases() {
+    fn replay_resolves_all_three_cases() {
         let fingerprint = Fingerprint(1);
         let response = CachedResponse {
             status_code: 200,

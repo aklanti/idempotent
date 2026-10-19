@@ -8,7 +8,7 @@ pub enum Error {
     #[error("idempotency key cannot be empty")]
     EmptyKey,
 
-    /// The principal a key is created under is empty.
+    /// The principal a key is bound to is empty.
     #[error("principal cannot be empty")]
     EmptyPrincipal,
 

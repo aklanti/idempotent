@@ -9,7 +9,7 @@ use crate::Error;
 pub struct IdempotencyKey(String);
 
 impl IdempotencyKey {
-    /// The maximum allowed length of an idempotency key
+    /// The maximum length of an idempotency key, in bytes.
     const MAX_LEN: usize = u8::MAX as usize;
     /// Separates a store prefix from a key, so keys and prefixes cannot contain it.
     const PREFIX_SEPARATOR: char = ':';
@@ -59,7 +59,7 @@ impl IdempotencyKey {
         Ok(Self(value))
     }
 
-    /// Returns a string slice of the idempotency key
+    /// Returns the idempotency key as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -69,12 +69,13 @@ impl IdempotencyKey {
     /// Two principals sending the same key never share an entry.
     ///
     /// The principal is hashed, so any identity works, a DID included, and it never appears in
-    /// the store. Take it from authentication, never from the request's own claims.
+    /// the store. Take it from authentication, never from the request's own claims. The hash takes
+    /// 33 of the 255 bytes, which leaves the key 222.
     ///
     /// # Errors
     ///
-    /// Returns an error if the principal is empty, if the key is not valid, or if the
-    /// result exceeds 255 bytes, which leaves the key 222.
+    /// Returns an error if the principal is empty, the key is invalid, or the result exceeds 255
+    /// bytes.
     ///
     /// # Examples
     ///

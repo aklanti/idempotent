@@ -52,7 +52,7 @@ impl From<&IdempotencyEntry<Completed>> for WireEntry {
     }
 }
 
-/// Current wire version
+/// The current wire version.
 const WIRE_VERSION: u8 = WireVersion::V1 as u8;
 
 impl TryFrom<&[u8]> for WireEntry {
@@ -109,7 +109,7 @@ enum WireStatus {
     Processing,
 }
 
-/// Schema version for the wire format
+/// The schema version of the wire format.
 ///
 /// The version is bumped when changing [`WireEntry`] fields to
 /// support rolling deploys where old and new nodes coexist.

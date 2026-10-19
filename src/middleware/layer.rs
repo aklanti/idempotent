@@ -109,7 +109,7 @@ impl<S> Settings<S> {
         }
     }
 
-    /// Admits a request within the cap on requests in flight, or rejects it as overloaded.
+    /// Takes a slot for the request, or rejects it as overloaded when every slot is taken.
     fn admit(&self) -> Result<OwnedSemaphorePermit, IdempotencyRejection> {
         Arc::clone(&self.max_in_flight)
             .try_acquire_owned()
@@ -244,7 +244,7 @@ impl<S, State> IdempotencyLayer<S, State> {
         self
     }
 
-    /// Sets the completed lease, how long a cached response replays.
+    /// Sets the completed lease, the time a cached response replays.
     ///
     /// A day by default. A zero lease replays nothing.
     pub const fn completed_ttl(mut self, ttl: Duration) -> Self {
@@ -287,7 +287,7 @@ impl<S, State> IdempotencyLayer<S, State> {
         self
     }
 
-    /// Sets how long the processing lease is renewed while the handler runs.
+    /// Sets the ceiling on renewing the processing lease while the handler runs.
     ///
     /// Ten minutes by default. Past the ceiling the lease lapses. A handler that finishes later
     /// still caches its response if nothing took the key. If another request did, the client
@@ -891,7 +891,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn buffer_accepts_a_body_at_the_cap_and_rejects_over_it() {
+    async fn buffer_accepts_a_body_at_the_cap_and_rejects_a_larger_one() {
         let Ok(Buffered::Bytes(bytes)) = buffer(Full::new(Bytes::from_static(b"12345")), 5).await
         else {
             panic!("a body at the cap must buffer");
@@ -1284,7 +1284,7 @@ mod service_tests {
     }
 
     #[tokio::test]
-    async fn request_body_over_cap_is_rejected() {
+    async fn request_body_larger_than_the_cap_is_rejected() {
         let handler = Handler::echoing();
         let service = IdempotencyLayer::new(store())
             .without_principal()
@@ -1438,7 +1438,7 @@ mod service_tests {
     }
 
     #[tokio::test]
-    async fn response_over_cache_cap_is_returned_and_keeps_claim() {
+    async fn response_larger_than_the_cache_cap_is_returned_and_keeps_claim() {
         let handler = Handler::answering(StatusCode::OK, "1234567");
         let service = IdempotencyLayer::new(store())
             .without_principal()
@@ -1516,7 +1516,7 @@ mod service_tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn handler_past_the_ceiling_caches_under_a_new_claim() {
+    async fn handler_past_the_ceiling_caches_with_a_new_claim() {
         let handler = Handler::new(|_| async {
             tokio::time::sleep(Duration::from_secs(10)).await;
             text(StatusCode::CREATED, "issued")
