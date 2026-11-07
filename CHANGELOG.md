@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0](https://github.com/aklanti/idempotent/compare/v2.0.0...v3.0.0) - 2026-07-11
+
 ### Breaking changes
 
 - Require a principal decision on `IdempotencyLayer`: it wraps a service only after `principal`, which replaces `scope`, or `without_principal`, which declares a single client
@@ -16,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rename `IdempotencyRejection::MissingScope` to `MissingPrincipal`, and its code from `missing-scope` to `missing-principal`
 - Hash a principal with the `aws-lc-rs` feature, on by default, or with the new `sha2` feature, where `middleware` enabled the `sha2` dependency itself; AWS-LC is used when both are on, and both produce the same key
 - Gate `IdempotencyKey::with_principal` and `IdempotencyLayer::principal` on one of those two features, so a build with default features off must enable one
+- MSRV is now 1.99
 
 ## [2.0.0](https://github.com/aklanti/idempotent/compare/v1.1.0...v2.0.0) - 2026-09-16
 

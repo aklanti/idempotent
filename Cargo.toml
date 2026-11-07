@@ -6,7 +6,7 @@ authors = ["Sede Soukossi"]
 description = "Type-safe idempotency keys for building reliable, retry-safe APIs"
 license = "MPL-2.0"
 repository = "https://github.com/aklanti/idempotent"
-rust-version = "1.98.0"
+rust-version = "1.99.0"
 keywords = ["idempotency", "idempotent", "api", "retry", "deduplication"]
 categories = ["web-programming", "data-structures"]
 
